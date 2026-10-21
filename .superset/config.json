@@ -1,0 +1,8 @@
+{
+  "setup": [
+    "bash scripts/superset-setup.sh"
+  ],
+  "teardown": [
+    "bash scripts/superset-teardown.sh"
+  ]
+}
