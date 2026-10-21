@@ -1,0 +1,34 @@
+# secrets and local config
+.env
+.env.*
+!.env.example
+config/models.yaml
+config/policies.yaml
+
+# runtime data
+data/
+.replays/
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# node / next
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+playwright-report/
+test-results/
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/

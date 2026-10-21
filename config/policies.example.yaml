@@ -1,0 +1,18 @@
+# Approval and budget policies (SPEC §15.1). Copy to config/policies.yaml and edit.
+approval_required_for:      # agents must call request_approval; supervisor also flags
+  - submitting forms that send data to third parties
+  - purchases or anything involving payment
+  - sending emails or messages
+  - deleting files outside /home/agent/Shared or /tmp
+  - creating accounts or logging in anywhere
+forbidden:
+  - entering passwords, card numbers, government IDs
+  - changing sandbox system security settings
+network:
+  mode: open                # or allowlist
+  allowlist: []
+frames:
+  keep_full_resolution: false
+budgets: { default_max_cost_usd: 5.0 }
+require_human_for_plan_changes: false
+auto_approve_followups: false

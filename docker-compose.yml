@@ -1,0 +1,59 @@
+# Local infrastructure shared by every worktree (fixed project name, so all
+# Superset worktrees use the same containers; each worktree gets its own database,
+# see APP_DB_NAME and `make db-up`). Dev-only credentials; never expose these ports.
+# If 5432/6379 are taken (e.g. a Homebrew Postgres), set APP_PG_PORT / APP_REDIS_PORT
+# in .env and point DATABASE_URL / REDIS_URL at those ports.
+name: agentplatform
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agentplatform
+      POSTGRES_PASSWORD: agentplatform  # local dev only
+      POSTGRES_DB: agentplatform
+    ports:
+      - "127.0.0.1:${APP_PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentplatform -d agentplatform"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${APP_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["s3"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: agentplatform  # local dev only
+      MINIO_ROOT_PASSWORD: agentplatform-dev
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

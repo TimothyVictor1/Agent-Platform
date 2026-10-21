@@ -1,0 +1,58 @@
+# Model profiles (SPEC §8.2). Copy to config/models.yaml and edit.
+# API keys are NEVER written here: `api_key_env` names the environment variable
+# (set in .env) that holds the key.
+#
+# Roles: planner, supervisor, agent (must be a vision model), summarizer.
+# coordinate_mode (vision roles only): absolute | normalized_1000 | relative
+default_profile: local-free
+
+profiles:
+  local-free:
+    planner:
+      provider: openai_compatible
+      base_url: http://z2.local:8080/v1
+      model: "<local text or VLM model>"
+      api_key_env: LOCAL_LLM_KEY
+    supervisor:
+      provider: openai_compatible
+      base_url: http://z2.local:8080/v1
+      model: "<local text or VLM model>"
+      api_key_env: LOCAL_LLM_KEY
+    agent:
+      provider: openai_compatible
+      base_url: http://z2.local:8081/v1
+      model: "<local vision GUI model>"
+      api_key_env: LOCAL_LLM_KEY
+      vision: true
+      max_images_in_context: 3
+      coordinate_mode: normalized_1000
+      screenshot_target_width: 1280
+      concurrency: 2
+    summarizer:
+      provider: openai_compatible
+      base_url: http://z2.local:8080/v1
+      model: "<small model>"
+      api_key_env: LOCAL_LLM_KEY
+
+  cloud-best:
+    planner:    { provider: anthropic, model: "<current Claude Sonnet>", api_key_env: ANTHROPIC_API_KEY }
+    supervisor: { provider: anthropic, model: "<current Claude Sonnet>" }
+    agent:
+      provider: anthropic
+      model: "<current Claude Sonnet>"
+      vision: true
+      max_images_in_context: 4
+      coordinate_mode: absolute
+      screenshot_target_width: 1280
+      concurrency: 6
+    summarizer: { provider: anthropic, model: "<current Claude Haiku>" }
+
+  openrouter-free:
+    planner:    { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free text model>", api_key_env: OPENROUTER_API_KEY, concurrency: 1 }
+    supervisor: { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free text model>", api_key_env: OPENROUTER_API_KEY, concurrency: 1 }
+    agent:      { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free vision model>", api_key_env: OPENROUTER_API_KEY, vision: true, concurrency: 1 }
+    summarizer: { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free text model>", api_key_env: OPENROUTER_API_KEY, concurrency: 1 }
+
+prices:   # USD per 1M tokens, used for Usage.cost_usd (missing model = 0)
+  "<current Claude Sonnet>": { input: 3.0, output: 15.0 }
+  "<current Claude Haiku>": { input: 1.0, output: 5.0 }

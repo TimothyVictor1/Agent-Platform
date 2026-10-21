@@ -13,7 +13,8 @@ NAME="$(printf '%s' "${SUPERSET_WORKSPACE_NAME:-$(basename "$HERE")}" | tr -c 'a
 if [ ! -f .env ] && [ -f "$MAIN_WORKTREE/.env" ]; then
   cp "$MAIN_WORKTREE/.env" .env
 fi
-[ -f .env ] || cp .env.example .env
+if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi
+[ -f .env ] || touch .env
 
 # 2) unique ports + database per worktree so several agents can run dev servers at once
 if ! grep -q '^# superset-worktree' .env; then
@@ -35,6 +36,7 @@ fi
 
 # 3) dependencies (skip quietly if the folders do not exist yet, e.g. before T00 is merged)
 if [ -f backend/pyproject.toml ]; then (cd backend && uv sync); fi
-if [ -f frontend/package.json ]; then (cd frontend && pnpm install --frozen-lockfile || pnpm install); fi
+if command -v pnpm >/dev/null 2>&1; then PNPM="pnpm"; else PNPM="corepack pnpm"; fi
+if [ -f frontend/package.json ]; then (cd frontend && $PNPM install --frozen-lockfile || $PNPM install); fi
 
 echo "Superset setup done for $NAME"
