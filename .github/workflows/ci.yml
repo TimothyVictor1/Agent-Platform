@@ -30,7 +30,47 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src tests
       - run: uv run pytest -m "not infra"
-      # infra tests (Postgres + Redis service containers) are added by T04
+
+  backend-infra:
+    name: Backend infra tests (Postgres + Redis)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentplatform
+          POSTGRES_PASSWORD: agentplatform  # throwaway CI container
+          POSTGRES_DB: agentplatform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentplatform -d agentplatform"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql+asyncpg://agentplatform:agentplatform@localhost:5432/agentplatform
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --locked
+      - run: uv run pytest -m infra
 
   frontend:
     name: Frontend (eslint, tsc, vitest)
