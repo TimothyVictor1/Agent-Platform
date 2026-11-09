@@ -7,7 +7,6 @@ from pathlib import Path
 
 import boto3
 import pytest
-from moto import mock_aws
 
 from agentplatform.artifacts.base import ArtifactStore, content_key
 from agentplatform.artifacts.frames import store_frame
@@ -24,7 +23,8 @@ def store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[ArtifactSt
     elif request.param == "fs":
         yield FileSystemArtifactStore(tmp_path.resolve() / "objects")
     else:
-        with mock_aws():
+        moto = pytest.importorskip("moto")
+        with moto.mock_aws():
             client = boto3.client(
                 "s3",
                 region_name="us-east-1",
