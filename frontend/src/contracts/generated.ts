@@ -2213,3 +2213,25 @@ export interface WsThumbnailMessage {
   step: number;
   jpeg_b64: string;
 }
+/**
+ * A single-use ticket for ``WS /ws/sessions/{id}?ticket=<ticket>``.
+ *
+ * Bound to the session it was issued for, valid for ``ttl_s`` seconds, consumed by
+ * the first WebSocket handshake that presents it. Lets the browser authenticate the
+ * WebSocket without putting the API token in a URL.
+ *
+ * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
+ * via the `definition` "WsTicket".
+ */
+export interface WsTicket {
+  ticket: string;
+  expires_at: string;
+  ttl_s: number;
+}
+/**
+ * Body of ``POST /sessions/{id}/ws-ticket``. Empty today; the body is optional.
+ *
+ * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
+ * via the `definition` "WsTicketRequest".
+ */
+export interface WsTicketRequest {}

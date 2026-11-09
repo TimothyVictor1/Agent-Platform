@@ -7734,6 +7734,40 @@
       ],
       "title": "WsThumbnailMessage",
       "type": "object"
+    },
+    "WsTicket": {
+      "additionalProperties": false,
+      "description": "A single-use ticket for ``WS /ws/sessions/{id}?ticket=<ticket>``.\n\nBound to the session it was issued for, valid for ``ttl_s`` seconds, consumed by\nthe first WebSocket handshake that presents it. Lets the browser authenticate the\nWebSocket without putting the API token in a URL.",
+      "properties": {
+        "ticket": {
+          "maxLength": 128,
+          "minLength": 32,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "ttl_s": {
+          "default": 60,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ticket",
+        "expires_at",
+        "ttl_s"
+      ],
+      "title": "WsTicket",
+      "type": "object"
+    },
+    "WsTicketRequest": {
+      "additionalProperties": false,
+      "description": "Body of ``POST /sessions/{id}/ws-ticket``. Empty today; the body is optional.",
+      "properties": {},
+      "title": "WsTicketRequest",
+      "type": "object"
     }
   }
 }

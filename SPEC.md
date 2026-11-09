@@ -752,11 +752,17 @@ Replay: `GET /sessions/{id}/events?after_seq=&limit=` ; `GET /sessions/{id}/fram
 
 Config: `GET /config/profiles` (names + role summaries, no keys); `GET /config/providers/health` (pings each model base URL and sandbox provider).
 
-WebSocket: `GET /ws/sessions/{id}?since=<seq>`.
+WebSocket: `POST /sessions/{id}/ws-ticket` (optional empty body `WsTicketRequest`) → `WsTicket {ticket, expires_at, ttl_s}` (201), then `GET /ws/sessions/{id}?ticket=<ticket>&since=<seq>`.
+
+WebSocket auth (browsers cannot set `Authorization` on a WebSocket, and the API token is never put in a URL):
+- The client asks for a ticket over REST with the normal bearer header. The ticket is a random URL-safe string (≥ 32 chars), bound to that session, **single-use** and valid for **60 seconds** (`WS_TICKET_TTL_S`). The server stores only its hash with a 60 s TTL (Redis) and consumes it atomically on the handshake (e.g. `GETDEL`), so a replayed or leaked ticket is useless.
+- Every connect and every reconnect needs a fresh ticket.
+- A missing, expired, already-used or wrong-session ticket closes the socket with code **4401**. On 4401 the client fetches a new ticket and reconnects (same `since` cursor). Every other 4000–4999 close code is terminal: the client does not reconnect.
+- When `APP_API_TOKEN` is unset (local development only), the WebSocket also accepts connections without a ticket. The `ws-ticket` endpoint still works in that mode, so the frontend always uses the same code path (fetch ticket, then connect).
 
 Errors: RFC 7807 problem+json `{type, title, status, detail, errors?}`.
 
-Auth v1: single local user; optional static bearer token `APP_API_TOKEN` checked by middleware when set. CORS only for the frontend origin.
+Auth v1: single local user; optional static bearer token `APP_API_TOKEN` checked by middleware when set (REST via `Authorization: Bearer`, WebSocket via ticket as above). CORS only for the frontend origin.
 
 ## 17. Database (Postgres)
 

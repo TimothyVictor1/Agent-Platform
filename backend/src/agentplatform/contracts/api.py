@@ -27,13 +27,16 @@ Endpoint → models:
 * ``GET /config/profiles``: ``ProfileList``; ``GET /config/providers/health``:
   ``ProvidersHealth``
 * ``GET /health``: ``HealthResponse``; ``GET /metrics``: ``MetricsResponse``
-* ``WS /ws/sessions/{id}?since=<seq>``: server sends ``WsServerMessage``
+* ``POST /sessions/{id}/ws-ticket``: ``WsTicketRequest`` (optional body) → ``WsTicket``
+  (201); single-use, valid ``WS_TICKET_TTL_S`` seconds
+* ``WS /ws/sessions/{id}?ticket=<ticket>&since=<seq>``: server sends ``WsServerMessage``;
+  closes with ``WS_CLOSE_TICKET_REJECTED`` (4401) on a missing/expired/used ticket
 * errors: ``Problem`` (``application/problem+json``)
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import Field, JsonValue
 
@@ -55,6 +58,8 @@ from agentplatform.contracts.session import Budgets, Session
 from agentplatform.contracts.task import Task, TaskDraft
 
 __all__ = [
+    "WS_CLOSE_TICKET_REJECTED",
+    "WS_TICKET_TTL_S",
     "ApprovalDecisionRequest",
     "ApprovalList",
     "ApprovePlanRequest",
@@ -85,6 +90,8 @@ __all__ = [
     "WsEventMessage",
     "WsServerMessage",
     "WsThumbnailMessage",
+    "WsTicket",
+    "WsTicketRequest",
 ]
 
 
@@ -272,6 +279,32 @@ class Problem(Contract):
 
 
 # --- websocket -------------------------------------------------------------------------
+
+WS_TICKET_TTL_S: Final = 60
+"""Seconds a WebSocket ticket stays valid after it was issued (SPEC §16)."""
+
+WS_CLOSE_TICKET_REJECTED: Final = 4401
+"""WebSocket close code for a missing, expired or already-used ticket. The client
+fetches a new ticket and reconnects; every other 4000-4999 close code is terminal."""
+
+
+class WsTicketRequest(Contract):
+    """Body of ``POST /sessions/{id}/ws-ticket``. Empty today; the body is optional."""
+
+
+class WsTicket(Contract):
+    """A single-use ticket for ``WS /ws/sessions/{id}?ticket=<ticket>``.
+
+    Bound to the session it was issued for, valid for ``ttl_s`` seconds, consumed by
+    the first WebSocket handshake that presents it. Lets the browser authenticate the
+    WebSocket without putting the API token in a URL.
+    """
+
+    ticket: str = Field(min_length=32, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    """Opaque URL-safe random string; the server stores only its hash."""
+    expires_at: UtcDatetime
+    ttl_s: int = Field(default=WS_TICKET_TTL_S, ge=1)
+
 
 
 class WsEventMessage(Contract):
