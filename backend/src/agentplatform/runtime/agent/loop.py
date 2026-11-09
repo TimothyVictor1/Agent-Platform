@@ -1022,6 +1022,12 @@ class AgentRuntime:
             f"send at most {self.config.max_coordination_calls} coordination calls followed by "
             "exactly one desktop or control call as the last call"
         )
+        if not terminals and n_coord:
+            # SPEC §10.3: a step must end with exactly one desktop or control call;
+            # coordination calls alone are not a step.
+            unknown = [c.name for c, k in zip(calls, kinds, strict=True) if k is None]
+            extra = f" (unknown tools: {', '.join(unknown)})" if unknown else ""
+            return f"no desktop or control call in this step{extra}; {rule}"
         if len(terminals) > 1:
             return f"{len(terminals)} desktop/control calls in one step; {rule}"
         if terminals and terminals[0] != len(calls) - 1:

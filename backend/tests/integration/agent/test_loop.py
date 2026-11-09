@@ -387,6 +387,29 @@ async def test_bad_step_composition_executes_nothing(
     assert all(r.is_error for r in step.coordination_calls)
 
 
+@pytest.mark.parametrize(
+    "calls",
+    [
+        [("post", {"title": "x"})],
+        [("post", {"title": "x"}), ("notebook_write", {})],
+        [("post", {"title": "x"}), ("teleport", {})],
+    ],
+)
+async def test_coordination_only_step_is_rejected(
+    harness: Any, calls: list[tuple[str, dict[str, Any]]]
+) -> None:
+    """T06 review #8: coordination calls without a desktop/control call run nothing."""
+    h = harness([multi_tool_response(*calls), give_up()])
+    await h.run()
+    assert h.coord.calls == []
+    assert h.sandbox.actions == []
+    results = tool_texts(h.model.calls[1].request)
+    assert len(results) == len(calls)
+    assert all(
+        r.startswith("ERROR: not executed:") and "no desktop or control call" in r for r in results
+    )
+
+
 async def test_tool_errors_do_not_crash_the_loop(harness: Any) -> None:
     def handler(cmd: str) -> CommandResult:
         raise RuntimeError("control server exploded")
