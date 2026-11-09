@@ -100,3 +100,12 @@ Decisions taken in T00 (implementation details the spec leaves open):
 - [0001 Python backend](adr/0001-python-backend.md)
 - [0002 Event sourcing](adr/0002-event-sourcing.md)
 - [0003 Provider-agnostic models and sandboxes](adr/0003-provider-agnostic-models-and-sandboxes.md)
+
+## Planner
+
+`runtime/planner.py` (SPEC §11) turns a request into a validated task DAG through the planner role's `ModelClient`. Prompts live in `runtime/prompts/planner_*.md`: a static system prompt with every §11.2 rule and two few-shot plans (unit tests check that both examples pass `validate_plan`), plus `string.Template` user messages for propose, refine, extend and repair. User text and plan JSON are put in delimited data blocks.
+
+- **One call:** request JSON (`response_format="json"`) → `extract_json_object` (code fences first, then the first balanced `{…}` that respects strings and escapes) → `PlanProposal` validation → `validate_plan` plus the mode's own checks → on any problem, exactly **one** repair call listing the numbered errors → otherwise `PlannerError` whose `errors` have the `PlanError` shape. Model errors propagate unchanged.
+- **Keys:** `propose` renames tasks to `T1..Tn` in topological order. `refine` keeps the keys of tasks that still exist and numbers new tasks after the highest `T<n>`, so `diff_plans` (added/removed/changed by key, field-level before/after) stays meaningful. `extend` asks the model for new tasks only, copies the existing tasks from the input unchanged and appends the new tasks with the next free keys.
+- **Limits:** the agent count goes to the model as a parallelism hint only; no code pads or splits tasks. 12 tasks per plan, including after follow-ups (`EXTEND_MAX_TOTAL_TASKS`, to be relaxed once `validate_plan` takes a limit). More than 3 `questions_for_user` are trimmed, and `suggested_tools` the agents do not have are dropped; both are logged.
+- **Planner-only error codes:** `invalid_json`, `invalid_plan`, `invalid_task`, `key_collision`, `depends_on_unusable_task` (a follow-up depends on a failed/cancelled task), `no_new_tasks`.
