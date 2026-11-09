@@ -2,7 +2,7 @@ import type { PlanError, ProblemError, TaskDraft } from "@/contracts/generated";
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Check JSON Schema vocabulary without resolving references or executing schema content. */
+/** Approximate the server's JSON Schema check without resolving references or testing patterns. */
 export function schemaError(schema: unknown): string | null {
   if (typeof schema === "boolean") return null;
   if (!object(schema)) return "A JSON schema must be an object or boolean.";
@@ -10,6 +10,9 @@ export function schemaError(schema: unknown): string | null {
   for (const [key, value] of Object.entries(schema)) {
     if (key === "type" && !(typeof value === "string" ? types.includes(value) : Array.isArray(value) && value.length > 0 && new Set(value).size === value.length && value.every(v => typeof v === "string" && types.includes(v)))) return "Schema type must name a JSON type (or a unique nonempty list of types).";
     if (["$id", "$schema", "$ref", "$anchor", "$dynamicRef", "$dynamicAnchor", "$comment", "title", "description", "format", "contentEncoding", "contentMediaType", "pattern"].includes(key) && typeof value !== "string") return `${key} must be a string.`;
+    if (key === "pattern" && typeof value === "string") {
+      try { new RegExp(value, "u"); } catch { return "pattern must be a valid regular expression."; }
+    }
     if (["$anchor", "$dynamicAnchor", "$recursiveAnchor"].includes(key) && (typeof value !== "string" || !/^[A-Za-z_][-A-Za-z0-9._]*$/.test(value))) return `${key} must be a valid schema anchor.`;
     if (key === "$recursiveRef" && typeof value !== "string") return "$recursiveRef must be a string.";
     if (key === "$id" && typeof value === "string" && !/^[^#]*#?$/.test(value)) return "$id cannot contain a nonempty fragment.";
@@ -28,6 +31,11 @@ export function schemaError(schema: unknown): string | null {
     }
     if (["$defs", "definitions", "properties", "patternProperties", "dependentSchemas"].includes(key)) {
       if (!object(value)) return `${key} must be an object of schemas.`;
+      if (key === "patternProperties") {
+        for (const pattern of Object.keys(value)) {
+          try { new RegExp(pattern, "u"); } catch { return "patternProperties keys must be valid regular expressions."; }
+        }
+      }
       for (const child of Object.values(value)) { const error = schemaError(child); if (error) return `${key}: ${error}`; }
     }
     if (key === "dependentRequired") {
@@ -85,8 +93,10 @@ export function validatePlan(tasks: TaskDraft[]): PlanError[] {
   const stack: string[] = [];
   const seen = new Set<string>();
   function visit(key: string) {
+    const task = byKey.get(key);
+    if (!task) return;
     colors.set(key, 1); stack.push(key);
-    for (const dep of byKey.get(key)!.depends_on) {
+    for (const dep of task.depends_on) {
       if (!byKey.has(dep) || dep === key) continue;
       if (colors.get(dep) === 1) {
         const cycle = [...stack.slice(stack.indexOf(dep)), dep];
@@ -116,7 +126,11 @@ export function fieldErrors(tasks: TaskDraft[]): ProblemError[] {
 }
 
 export function cycleEdges(errors: PlanError[]): Set<string> {
-  return new Set(errors.flatMap(error => (error.cycle ?? []).slice(1).map((dep, i) => `${dep}->${error.cycle![i]}`)));
+  return new Set(errors.flatMap(error => {
+    const cycle = error.cycle;
+    if (!cycle) return [];
+    return cycle.slice(1).map((dep, i) => `${dep}->${cycle[i]}`);
+  }));
 }
 
 export function nodeErrors(key: string, errors: (PlanError | ProblemError)[]): string[] {

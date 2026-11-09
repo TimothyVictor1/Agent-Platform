@@ -58,7 +58,10 @@ export function PlanGraph({ tasks, errors, selection, statuses, onSelect, onConn
   const { nodes, edges } = useMemo(() => graphElements(tasks, errors, selection, statuses), [tasks, errors, selection, statuses]);
   const [positions, setPositions] = useState<Record<string, XYPosition>>({});
   const theme = useSyncExternalStore(subscribeTheme, currentTheme, serverTheme);
-  return <div aria-label="Plan dependency graph" className="h-[620px] min-w-0 overflow-hidden rounded-xl border bg-muted/20">
+  if (Object.keys(positions).some(key => !tasks.some(task => task.key === key))) {
+    setPositions(Object.fromEntries(Object.entries(positions).filter(([key]) => tasks.some(task => task.key === key))));
+  }
+  return <div role="region" aria-label="Plan dependency graph" className="h-[620px] min-w-0 overflow-hidden rounded-xl border bg-muted/20">
     <ReactFlow nodes={nodes.map(node => ({ ...node, position: positions[node.id] ?? node.position }))} edges={edges} nodeTypes={nodeTypes} fitView colorMode={theme} minZoom={0.2} maxZoom={1.6} deleteKeyCode={null} multiSelectionKeyCode={null}
       onNodeClick={(_, node) => onSelect({ type: "node", key: node.id })} onEdgeClick={(_, edge) => onSelect({ type: "edge", source: edge.source, target: edge.target })} onPaneClick={() => onSelect(null)}
       onNodesChange={changes => { for (const change of changes) {

@@ -33,6 +33,13 @@ describe("plan validation", () => {
     expect(schemaError({ required: ["x", "x"] })).toContain("required");
     expect(fieldErrors([draftTask("A", { title: "", goal: "" })])).toHaveLength(2);
   });
+  it("rejects invalid pattern and patternProperties regexes, including invalid Unicode escapes", () => {
+    for (const pattern of ["[", "(", "\\u{not-hex}"]) {
+      expect(schemaError({ pattern })).toContain("valid regular expression");
+      expect(schemaError({ patternProperties: { [pattern]: {} } })).toContain("valid regular expressions");
+    }
+    expect(schemaError({ pattern: "^[a-z]+$", patternProperties: { "^item_": { type: "string" } } })).toBeNull();
+  });
 });
 
 describe("draft state", () => {

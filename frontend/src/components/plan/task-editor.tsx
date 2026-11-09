@@ -8,6 +8,7 @@ import type { createDraftStore } from "./draft-store";
 
 type Store = ReturnType<typeof createDraftStore>;
 const tools: TaskDraft["suggested_tools"] = ["browser", "terminal", "office", "files"];
+const isOutputKind = (value: string): value is TaskDraft["outputs"][number]["kind"] => value === "text" || value === "json" || value === "artifact";
 
 export function TaskEditor({ store, taskKey, errors, onDelete }: { store: Store; taskKey: string; errors: string[]; onDelete: () => void }) {
   const state = useStore(store);
@@ -39,7 +40,7 @@ export function TaskEditor({ store, taskKey, errors, onDelete }: { store: Store;
         const schemaId = `${task.key}:${index}`;
         return <div key={index} className="space-y-2 rounded-lg border p-3">
           <label className="block">Output {index + 1} key<input value={item.key} onChange={e => output(index, { key: e.target.value })} /></label>
-          <label className="block">Output {index + 1} kind<select value={item.kind} onChange={e => { state.setSchema(task.key, index, ""); output(index, { kind: e.target.value as typeof item.kind, json_schema: null }); }}><option value="text">Text</option><option value="json">JSON</option><option value="artifact">Artifact</option></select></label>
+          <label className="block">Output {index + 1} kind<select value={item.kind} onChange={e => { const kind = e.target.value; if (!isOutputKind(kind)) return; state.setSchema(task.key, index, ""); output(index, { kind, json_schema: null }); }}><option value="text">Text</option><option value="json">JSON</option><option value="artifact">Artifact</option></select></label>
           <label className="block">Output {index + 1} description<textarea value={item.description} rows={2} maxLength={500} onChange={e => output(index, { description: e.target.value })} /></label>
           {item.kind === "json" && <label className="block">Output {index + 1} JSON schema (optional)<textarea className="font-mono text-xs" rows={5} aria-invalid={Boolean(state.schemaErrors[schemaId])} aria-describedby={state.schemaErrors[schemaId] ? `schema-error-${task.key}-${index}` : undefined} value={state.schemaText[schemaId] ?? (item.json_schema ? JSON.stringify(item.json_schema, null, 2) : "")} onChange={e => state.setSchema(task.key, index, e.target.value)} /></label>}
           {state.schemaErrors[schemaId] && <p id={`schema-error-${task.key}-${index}`} role="alert" className="text-sm text-destructive">Invalid JSON: {state.schemaErrors[schemaId]}</p>}
