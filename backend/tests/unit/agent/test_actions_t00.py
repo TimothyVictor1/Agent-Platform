@@ -50,20 +50,20 @@ def test_phash_stable_and_discriminating() -> None:
 def test_absolute_coords_scale_and_clamp() -> None:
     obs = prepare_observation(make_png(1280, 800), target_width=1024)
     assert to_sandbox_coords(512, 320, "absolute", obs, (1280, 800)) == (640, 400)
-    assert to_sandbox_coords(5000, 10, "absolute", obs, (1280, 800)) == (1279, 12)
+    assert to_sandbox_coords(1536, 10, "absolute", obs, (1280, 800)) == (1279, 12)
 
 
-@pytest.mark.parametrize(("x", "y"), [(None, 1), (1, None), (math.nan, 1), (-3, 4)])
+def test_absolute_coords_far_outside_raise() -> None:
+    obs = prepare_observation(make_png(1280, 800), target_width=1024)
+    with pytest.raises(CoordinateError):
+        to_sandbox_coords(5000, 10, "absolute", obs, (1280, 800))
+
+
+@pytest.mark.parametrize(("x", "y"), [(None, 1), (1, None), (math.nan, 1), (-6, 4)])
 def test_bad_coords_raise_coordinate_error(x: float | None, y: float | None) -> None:
     obs = prepare_observation(make_png(), 1280)
     with pytest.raises(CoordinateError):
         to_sandbox_coords(x, y, "absolute", obs, (1280, 800))
-
-
-def test_other_modes_are_left_to_t03() -> None:
-    obs = prepare_observation(make_png(), 1280)
-    with pytest.raises(NotImplementedError, match="T03"):
-        to_sandbox_coords(1, 1, "normalized_1000", obs, (1280, 800))
 
 
 def test_normalize_key_basic() -> None:
