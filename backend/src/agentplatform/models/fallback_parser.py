@@ -17,6 +17,9 @@ Recognised forms, in text order:
 
 The text is untrusted model output: Python calls are parsed with ``ast`` and only
 literal arguments are accepted (``ast.literal_eval``); nothing is ever executed.
+Arguments must be plain JSON data (``_json_safe``): calls with bytes, sets, ``...``,
+NaN or infinite numbers, or values nested deeper than ``MAX_JSON_DEPTH`` are dropped,
+so every returned ``ToolCall`` can be sent back to a provider as strict JSON.
 Calls whose mapped name is not in ``valid_tool_names`` are dropped. The registry
 validates arguments, so this parser only maps names and argument positions.
 
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Collection
@@ -107,18 +111,47 @@ def _json_spans(text: str) -> list[tuple[int, int, Any]]:
     return spans
 
 
+def _json_safe(value: Any, depth: int = 0) -> Any:
+    """``value`` as plain JSON data, or ``ValueError``.
+
+    Accepts ``None``, ``str``, ``bool``, ``int``, finite ``float``, lists (tuples become
+    lists) and dicts with string keys, nested at most ``MAX_JSON_DEPTH`` deep. Rejects
+    everything else: bytes, sets, ``Ellipsis``, complex numbers, NaN and +-inf.
+    """
+    if depth > MAX_JSON_DEPTH:
+        raise ValueError("value is nested too deeply")
+    if value is None or isinstance(value, str | int):  # bool is an int
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("number is not finite")
+        return value
+    if isinstance(value, list | tuple):
+        return [_json_safe(v, depth + 1) for v in value]
+    if isinstance(value, dict):
+        if not all(isinstance(k, str) for k in value):
+            raise ValueError("object keys must be strings")
+        return {k: _json_safe(v, depth + 1) for k, v in value.items()}
+    raise ValueError(f"{type(value).__name__} is not JSON data")
+
+
 def _coerce_args(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return {}
-    if isinstance(raw, dict):
-        return {str(k): v for k, v in raw.items()}
     if isinstance(raw, str):
+        if not raw.strip():
+            return {}
         try:
-            parsed = json.loads(raw) if raw.strip() else {}
-        except ValueError:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
             return {"_raw": raw}
-        return {str(k): v for k, v in parsed.items()} if isinstance(parsed, dict) else None
-    return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        args: dict[str, Any] = _json_safe(raw)
+    except ValueError:  # NaN/Infinity (json accepts them), non-string keys, too deep
+        return None
+    return args
 
 
 def _from_json_object(obj: dict[str, Any], depth: int = 0) -> tuple[str, dict[str, Any]] | None:
@@ -182,7 +215,7 @@ def _call_end(text: str, open_paren: int) -> int | None:
 
 
 def _literal(node: ast.expr) -> Any:
-    return ast.literal_eval(node)
+    return _json_safe(ast.literal_eval(node))
 
 
 def _parse_call(src: str) -> tuple[str, list[Any], dict[str, Any]] | None:
@@ -215,7 +248,7 @@ def _parse_call(src: str) -> tuple[str, list[Any], dict[str, Any]] | None:
 
 
 def _is_num(v: object) -> TypeGuard[int | float]:
-    return isinstance(v, int | float) and not isinstance(v, bool)
+    return isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _xy(args: list[Any], kwargs: dict[str, Any]) -> tuple[Any, Any] | None:

@@ -296,3 +296,41 @@ def test_recursion_error_in_the_json_decoder_skips_the_span(
     assert [(c.name, c.arguments) for c in parse_text_tool_calls(text, TOOLS)] == [
         ("key", {"combo": "enter"})
     ]
+
+
+NON_JSON_CASES: list[tuple[str, str]] = [
+    ("bytes", "type_text(b'abc')"),
+    ("set", "type_text({1, 2})"),
+    ("ellipsis", "type_text(...)"),
+    ("complex", "type_text(1j)"),
+    ("non-str dict key", "run_command({1: 'x'})"),
+    ("nested bytes", "run_command(['ls', b'-l'])"),
+    ("inf literal", "click(1e999, 2)"),
+    ("inf keyword", "click(x=1, y=-1e999)"),
+    ("pyautogui inf", "pyautogui.click(1e999, 2)"),
+    ("pyautogui inf clicks", "pyautogui.click(1, 2, clicks=1e999)"),
+    ("pyautogui inf scroll", "pyautogui.scroll(1e999)"),
+    ("json NaN", '{"tool": "click", "args": {"x": NaN, "y": 2}}'),
+    ("json Infinity", '{"tool": "click", "args": {"x": 1, "y": Infinity}}'),
+    ("json -Infinity in string args", '{"name": "click", "arguments": "{\\"x\\": -Infinity}"}'),
+    ("json too deep", '{"tool": "run_command", "args": {"cmd": ' + "[" * 40 + "]" * 40 + "}}"),
+]
+
+
+@pytest.mark.parametrize("text", [t for _, t in NON_JSON_CASES], ids=[i for i, _ in NON_JSON_CASES])
+def test_calls_with_non_json_arguments_are_dropped(text: str) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)  # was OverflowError or a non-JSON value
+    assert calls == []
+
+
+def test_tuples_become_lists_and_parsed_arguments_are_strict_json() -> None:
+    calls = parse_text_tool_calls(
+        "pyautogui.click((10, 20)) pyautogui.hotkey(('ctrl', 'l')) run_command(('ls', '-l'))", TOOLS
+    )
+    assert [(c.name, c.arguments) for c in calls] == [
+        ("click", {"x": 10, "y": 20}),
+        ("key", {"combo": "ctrl+l"}),
+        ("run_command", {"cmd": ["ls", "-l"]}),
+    ]
+    for call in calls:
+        json.dumps(call.arguments, allow_nan=False)

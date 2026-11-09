@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -331,3 +332,23 @@ async def test_health_ok_and_failure() -> None:
 def test_name_label() -> None:
     client = make_client(Server())
     assert client.name == "openai_compatible:qwen2.5-vl-7b@z2.local:8081"
+
+
+@pytest.mark.parametrize(
+    "value", [b"raw", {1, 2}, math.inf, math.nan], ids=["bytes", "set", "inf", "nan"]
+)
+async def test_non_json_tool_arguments_are_a_model_error_without_a_request(value: Any) -> None:
+    server = Server()
+    client = make_client(server)
+    call = ToolCall(id="call_1", name="click", arguments={"x": value})
+    req = ModelRequest(
+        messages=[
+            Message.text("user", "hi"),
+            Message(role="assistant", content=[], tool_calls=[call]),
+            Message.tool_result("call_1", "ok"),
+        ]
+    )
+    with pytest.raises(ModelError, match=r"tool call .* has non-JSON arguments"):
+        await client.complete(req)
+    assert server.requests == []
+    await client.aclose()

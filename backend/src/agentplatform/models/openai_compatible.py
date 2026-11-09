@@ -19,7 +19,6 @@ Mapping (SPEC §8.1):
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from typing import Any
 
@@ -41,6 +40,7 @@ from agentplatform.models._common import (
     b64,
     check_images_only_in_user,
     count_images,
+    dump_arguments,
     elapsed_ms,
     health_failure,
     host_label,
@@ -83,7 +83,7 @@ def _tool_call_out(call: ToolCall) -> dict[str, Any]:
     return {
         "id": call.id,
         "type": "function",
-        "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+        "function": {"name": call.name, "arguments": dump_arguments(call)},
     }
 
 

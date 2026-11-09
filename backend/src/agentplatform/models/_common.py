@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from agentplatform.contracts.common import HealthStatus
-from agentplatform.contracts.model_io import ImagePart, Message, ModelRequest
+from agentplatform.contracts.model_io import ImagePart, Message, ModelRequest, ToolCall
 from agentplatform.errors import ModelError
 
 HEALTH_ERROR_CHARS = 200
@@ -26,6 +26,19 @@ def b64(image: ImagePart) -> str:
 def check_images_only_in_user(msg: Message) -> None:
     if msg.role != "user" and msg.images():
         raise ModelError(f"images are only allowed in user messages, not {msg.role!r}")
+
+
+def dump_arguments(call: ToolCall) -> str:
+    """``call.arguments`` as strict JSON (no NaN/Infinity).
+
+    Raises ``ModelError`` when they are not JSON data (bytes, sets, non-finite
+    numbers, too deep), so a bad call in the history fails as a typed error before
+    any request is sent.
+    """
+    try:
+        return json.dumps(call.arguments, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        raise ModelError(f"tool call {call.id!r} ({call.name!r}) has non-JSON arguments") from None
 
 
 def parse_arguments(raw: Any) -> dict[str, Any]:
