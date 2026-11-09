@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Terminal
+GenericName=Terminal Emulator
+Comment=Open a shell in /home/agent
+Exec=xfce4-terminal --default-working-directory=/home/agent
+Terminal=false
+Icon=org.xfce.terminal
+Categories=System;TerminalEmulator;X-AgentPlatform;

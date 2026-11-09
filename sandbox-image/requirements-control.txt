@@ -1,0 +1,5 @@
+# HTTP control server (FastAPI + uvicorn). Runs in an isolated venv at
+# /opt/control-venv inside the sandbox image; nothing else installs pip deps.
+fastapi>=0.115,<1
+uvicorn>=0.32,<1
+python-multipart>=0.0.10,<0.1
