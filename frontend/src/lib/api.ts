@@ -20,7 +20,7 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
   const response = env.mock ? await (await import("@/mocks/api")).mockRequest(url, init) : await fetch(url, init);
   if (!response.ok) {
     let data: Partial<Problem> = {};
-    try { data = await response.json() as Partial<Problem>; } catch { /* Non-JSON proxy errors also become ApiError. */ }
+    try { const value: unknown = await response.json(); if (value && typeof value === "object") data = value as Partial<Problem>; } catch { /* Non-JSON proxy errors also become ApiError. */ }
     throw new ApiError({ type: typeof data.type === "string" ? data.type : "about:blank", title: typeof data.title === "string" ? data.title : response.statusText || "Request failed", status: response.status, detail: typeof data.detail === "string" ? data.detail : null, instance: typeof data.instance === "string" ? data.instance : null, errors: Array.isArray(data.errors) ? data.errors : null });
   }
   return (binary ? await response.blob() : await response.json()) as T;

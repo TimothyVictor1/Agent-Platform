@@ -26,6 +26,10 @@ describe("REST client", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Network unavailable")));
     await expect(api.profiles()).rejects.toThrow("Network unavailable");
   });
+  it("maps unexpected JSON error bodies to ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("null", { status: 500 })));
+    await expect(api.profiles()).rejects.toMatchObject({ name: "ApiError", status: 500 });
+  });
   it("encodes path IDs and all filters and omits unset values", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] })));
     vi.stubGlobal("fetch", fetcher);

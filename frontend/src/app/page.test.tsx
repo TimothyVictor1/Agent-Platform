@@ -56,8 +56,20 @@ describe("HomePage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Planner offline"); expect(push).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Plan" })); await waitFor(() => expect(push).toHaveBeenCalled());
   });
-  it("disables submission until profiles load and during creation", async () => {
+  it("disables submission until profiles load", async () => {
     vi.mocked(api.profiles).mockReturnValue(new Promise(() => {})); renderPage(); expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+  });
+  it("prevents duplicate submissions while a session is being created", async () => {
+    let complete: ((value: typeof session) => void) | undefined;
+    vi.mocked(api.createSession).mockReturnValue(new Promise(resolve => { complete = resolve; }));
+    await ready();
+    fireEvent.change(screen.getByLabelText("What should your agents do?"), { target: { value: "Research" } });
+    await userEvent.click(screen.getByRole("button", { name: "Plan" }));
+    expect(screen.getByRole("button", { name: "Planning…" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText("What should your agents do?"), { key: "Enter", ctrlKey: true });
+    expect(api.createSession).toHaveBeenCalledTimes(1);
+    complete?.(session);
+    await waitFor(() => expect(push).toHaveBeenCalled());
   });
   it("shows empty and failed server state clearly", async () => {
     vi.mocked(api.sessions).mockResolvedValue({ items: [], next_cursor: null }); vi.mocked(api.providerHealth).mockRejectedValue(new Error("Health offline")); vi.mocked(api.profiles).mockResolvedValue({ items: [], default_profile: null });
