@@ -768,6 +768,9 @@ class AgentRuntime:
         # 1. observe
         try:
             png = await self._sandbox.screenshot()
+            obs = await asyncio.to_thread(
+                prepare_observation, png, cfg.screenshot_target_width, cfg.jpeg_quality
+            )
         except SandboxExpiredError as exc:
             await self._emit(
                 AgentError(agent_id=self.agent.id, error=exc.detail[:500], recoverable=False)
@@ -784,9 +787,6 @@ class AgentRuntime:
             await self.sleep(cfg.error_backoff_s)
             return None
         run.sandbox_errors = 0
-        obs = await asyncio.to_thread(
-            prepare_observation, png, cfg.screenshot_target_width, cfg.jpeg_quality
-        )
         if run.last_phash is not None and run.builder.history:
             changed = phash_distance(run.last_phash, obs.phash) > cfg.stuck.unchanged_max_distance
             run.builder.mark_screen_changed(changed)
