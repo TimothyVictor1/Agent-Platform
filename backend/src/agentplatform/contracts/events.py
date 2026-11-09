@@ -73,6 +73,11 @@ class EventEnvelope(Contract):
     ts: UtcDatetime
     actor: Actor
     causation_id: str | None = None
+    """Id of the event or command that caused this event. On ``session.plan_proposed``
+    and ``session.plan_updated`` it is the ``command_id`` of the originating request
+    (the ``CommandAccepted.command_id`` the API returned), so the UI can match a
+    stored plan to its ``PUT /plan``, refine or follow-up request; ``None`` when no
+    request caused it (e.g. a supervisor plan change)."""
     correlation_id: str | None = None
 
 
@@ -91,7 +96,10 @@ class SessionPlanningStarted(EventPayload):
 
 
 class SessionPlanProposed(EventPayload):
-    """The planner produced a proposal. It becomes plan ``plan_version``."""
+    """The planner produced a proposal. It becomes plan ``plan_version``.
+
+    The envelope's ``causation_id`` is the id of the command that ran the planner
+    (plan_session, refine_plan or followup)."""
 
     event_type = "session.plan_proposed"
     plan_version: int = Field(ge=1)
@@ -111,7 +119,10 @@ class SessionPlanningFailed(EventPayload):
 
 class SessionPlanUpdated(EventPayload):
     """A plan version was stored that did not come from the planner (user edit via
-    ``PUT /plan`` or a supervisor plan change)."""
+    ``PUT /plan`` or a supervisor plan change).
+
+    For a user edit the envelope's ``causation_id`` is the ``command_id`` returned by
+    that ``PUT /plan``; ``None`` for supervisor changes."""
 
     event_type = "session.plan_updated"
     plan_version: int = Field(ge=1)

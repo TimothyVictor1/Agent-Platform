@@ -347,10 +347,12 @@ Event {
   type: EventType, ts,
   actor: Actor,
   payload: <typed by event type>,
-  causation_id?: str,                      # event that caused this one
+  causation_id?: str,                      # event or command that caused this one (see below)
   correlation_id?: str                     # e.g. task id or approval id
 }
 ```
+
+`causation_id` on plan events: `session.plan_proposed` and `session.plan_updated` set it to the `command_id` of the originating request, i.e. the `CommandAccepted.command_id` the API returned for `PUT /sessions/{id}/plan`, `POST …/refine` or `POST …/followup` (for the first plan: the id of the internal `command.plan_session`). The UI uses it to match a stored plan to the request that produced it, e.g. to clear a pending "saving…" state for exactly its own `PUT`. It is `null` when no request caused the event (a supervisor plan change). The field is optional; older events without it stay valid.
 
 ### 7.2 Event types (payload models live next to the envelope)
 

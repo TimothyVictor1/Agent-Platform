@@ -1078,6 +1078,9 @@ export interface SessionPlanProposedEvent {
 /**
  * The planner produced a proposal. It becomes plan ``plan_version``.
  *
+ * The envelope's ``causation_id`` is the id of the command that ran the planner
+ * (plan_session, refine_plan or followup).
+ *
  * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
  * via the `definition` "SessionPlanProposed".
  */
@@ -1175,6 +1178,9 @@ export interface SessionPlanUpdatedEvent {
 /**
  * A plan version was stored that did not come from the planner (user edit via
  * ``PUT /plan`` or a supervisor plan change).
+ *
+ * For a user edit the envelope's ``causation_id`` is the ``command_id`` returned by
+ * that ``PUT /plan``; ``None`` for supervisor changes.
  *
  * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
  * via the `definition` "SessionPlanUpdated".

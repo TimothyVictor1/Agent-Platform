@@ -4648,7 +4648,7 @@
     },
     "SessionPlanProposed": {
       "additionalProperties": false,
-      "description": "The planner produced a proposal. It becomes plan ``plan_version``.",
+      "description": "The planner produced a proposal. It becomes plan ``plan_version``.\n\nThe envelope's ``causation_id`` is the id of the command that ran the planner\n(plan_session, refine_plan or followup).",
       "properties": {
         "plan_version": {
           "minimum": 1,
@@ -4743,7 +4743,7 @@
     },
     "SessionPlanUpdated": {
       "additionalProperties": false,
-      "description": "A plan version was stored that did not come from the planner (user edit via\n``PUT /plan`` or a supervisor plan change).",
+      "description": "A plan version was stored that did not come from the planner (user edit via\n``PUT /plan`` or a supervisor plan change).\n\nFor a user edit the envelope's ``causation_id`` is the ``command_id`` returned by\nthat ``PUT /plan``; ``None`` for supervisor changes.",
       "properties": {
         "plan_version": {
           "minimum": 1,
