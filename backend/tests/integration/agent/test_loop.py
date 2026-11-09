@@ -811,6 +811,56 @@ async def test_stalled_heartbeat_publish_does_not_delay_renewal(harness: Any) ->
     assert renewals == 3
 
 
+def _register_slow_coordination(h: Harness, lose: asyncio.Event) -> None:
+    async def slow(args: dict[str, Any], ctx: Any) -> ToolResult:
+        lose.set()  # the next renewal fails while this call is still running
+        await asyncio.sleep(0.2)
+        return ToolResult(text="slow ok")
+
+    h.runtime.registry.register(
+        "coordination",
+        ToolSpec(name="slow_post", description="slow",
+                 parameters={"type": "object", "properties": {}}),
+        slow,
+        kind="coordination",
+    )  # fmt: skip
+
+
+async def test_lease_lost_during_coordination_skips_desktop_call(harness: Any) -> None:
+    """T06 review #4: no desktop action after the lease is lost mid-step."""
+    lose = asyncio.Event()
+
+    async def renew() -> bool:
+        return not lose.is_set()
+
+    step = multi_tool_response(("slow_post", {}), ("click", {"x": 10, "y": 10}))
+    h = harness([step, click(2)], renew_lease=renew)
+    _register_slow_coordination(h, lose)
+    out = await h.run(limit_s=5)
+    assert out.reason == "lease_lost"
+    assert h.sandbox.actions == []
+    action = h.steps()[0].action
+    assert action.tool == "click"
+    assert "lease was lost" in action.result
+
+
+async def test_lease_lost_during_coordination_rejects_submit(harness: Any) -> None:
+    lose = asyncio.Event()
+
+    async def renew() -> bool:
+        return not lose.is_set()
+
+    step = multi_tool_response(
+        ("slow_post", {}), ("submit_result", {"summary": "s", "outputs": {"result": "1"}})
+    )
+    h = harness([*clicks(3), step], renew_lease=renew)
+    _register_slow_coordination(h, lose)
+    out = await h.run(limit_s=5)
+    assert out.status == "failed"
+    assert out.reason == "lease_lost"
+    assert out.result is None
+
+
 # -- digest and modes ----------------------------------------------------------------------
 
 

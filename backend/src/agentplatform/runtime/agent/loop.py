@@ -884,7 +884,11 @@ class AgentRuntime:
         else:
             problem = self._order_problem(calls)
             for call in calls:
-                if problem is None and self.control.mode != "run":
+                # Re-checked before every call: a coordination call may take long
+                # enough for the lease to be lost or the user to take over.
+                if problem is None and self._lease_lost.is_set():
+                    problem = "the task lease was lost before this action ran"
+                elif problem is None and self.control.mode != "run":
                     problem = "the user paused or stopped you before this action ran"
                 if problem is not None:
                     results.append(_not_executed(problem))
@@ -923,6 +927,12 @@ class AgentRuntime:
                 task_outcome = self._outcome(
                     run, "failed", reason="fail_task", detail=detail[:1000]
                 )
+
+        if self._lease_lost.is_set():
+            # Never accept a submit/fail outcome once someone else may own the task.
+            task_outcome = self._outcome(
+                run, "failed", reason="lease_lost", detail="task lease lost"
+            )
 
         # 6. agent.step
         records = [
