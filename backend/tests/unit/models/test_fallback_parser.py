@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from agentplatform.contracts.model_io import ModelResponse
+from agentplatform.models import fallback_parser
 from agentplatform.models.fallback_parser import (
     MAX_CALLS,
     MAX_JSON_DEPTH,
@@ -383,3 +384,23 @@ def test_json_inside_a_python_call_is_not_a_second_call(text: str, expected: lis
 def test_pyautogui_click_third_positional_is_clicks(text: str, expected: list[Call]) -> None:
     calls = parse_text_tool_calls(text, TOOLS)
     assert [(c.name, c.arguments) for c in calls] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("drag(10, 20, 30, 40)", [("drag", {"x1": 10, "y1": 20, "x2": 30, "y2": 40})]),
+        ("pyautogui.drag(10, 20, 30, 40)", [("drag", {"x1": 10, "y1": 20, "x2": 30, "y2": 40})]),
+        ("pyautogui.dragTo(30, 40)", []),  # no start point
+        ("pyautogui.drag(5, 5)", []),  # relative offset, no start point
+    ],
+)
+def test_only_the_documented_drag_form_is_supported(text: str, expected: list[Call]) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == expected
+
+
+def test_docstring_lists_only_supported_pyautogui_names() -> None:
+    doc = fallback_parser.__doc__ or ""
+    assert "dragTo/" not in doc
+    assert "drag(x1, y1, x2, y2)" in doc

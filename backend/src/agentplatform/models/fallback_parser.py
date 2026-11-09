@@ -13,8 +13,11 @@ Recognised forms, in text order (JSON inside a Python call, e.g. the text of
   bare or inside ```json fences, one or several, also inside a JSON list.
 * Python-style calls: ``click(512, 300)``, ``click(x=512, y=300)``,
   ``type_text("hello")``, ``key("ctrl+l")`` and the pyautogui vocabulary
-  (``pyautogui.click/doubleClick/rightClick/moveTo/dragTo/write/typewrite/press/
-  hotkey/scroll/hscroll``).
+  (``pyautogui.click/leftClick/rightClick/middleClick/doubleClick/tripleClick/moveTo/
+  write/typewrite/press/hotkey/scroll/vscroll/hscroll``).
+* Drags only in the platform's absolute form ``drag(x1, y1, x2, y2)`` (also written
+  ``pyautogui.drag(x1, y1, x2, y2)``). ``pyautogui.dragTo(x, y)`` and the relative
+  ``pyautogui.drag(dx, dy)`` have no start point and are not recognised.
 
 The text is untrusted model output: Python calls are parsed with ``ast`` and only
 literal arguments are accepted (``ast.literal_eval``); nothing is ever executed.
