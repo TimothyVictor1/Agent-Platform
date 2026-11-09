@@ -30,7 +30,7 @@ from agentplatform.contracts.common import HealthStatus
 from agentplatform.contracts.model_io import ModelRequest, ModelResponse
 from agentplatform.errors import ModelTimeoutError
 from agentplatform.models.base import ModelClient
-from agentplatform.models.errors import RetryableModelError, is_retryable
+from agentplatform.models.errors import RetryableModelError, is_retryable, redact_secrets
 
 __all__ = [
     "DEFAULT_DEBUG_DIR",
@@ -235,7 +235,7 @@ class DebugLoggingClient(_Wrapper):
     """Appends one JSONL record per call to ``<directory>/<client>-<date>.jsonl``.
 
     Records hold the request (images replaced by sha256 hashes), the response (or the
-    error type and its safe message) and timings. API keys never reach this layer:
+    error type and its message, secrets redacted) and timings. API keys never reach this layer:
     they live only inside the provider SDK client. Writes run in a worker thread and
     never fail the model call; each record is one ``write()`` in append mode.
     """
@@ -268,7 +268,8 @@ class DebugLoggingClient(_Wrapper):
         try:
             resp = await self.inner.complete(req)
         except Exception as err:
-            record["error"] = {"type": type(err).__name__, "message": str(err)[:500]}
+            message = redact_secrets(str(err))[:500]
+            record["error"] = {"type": type(err).__name__, "message": message}
             record["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
             await self._log(record)
             raise

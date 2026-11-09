@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from agentplatform.contracts.common import HealthStatus
 from agentplatform.contracts.model_io import ImagePart, Message, ModelRequest, ToolCall
 from agentplatform.errors import ModelError
+from agentplatform.models.errors import redact_secrets
 
 HEALTH_ERROR_CHARS = 200
 
@@ -69,5 +70,5 @@ def elapsed_ms(started: float) -> int:
 
 
 def health_failure(started: float, err: BaseException) -> HealthStatus:
-    detail = str(getattr(err, "detail", "") or err) or type(err).__name__
+    detail = redact_secrets(str(getattr(err, "detail", "") or err)) or type(err).__name__
     return HealthStatus(ok=False, latency_ms=elapsed_ms(started), error=detail[:HEALTH_ERROR_CHARS])
