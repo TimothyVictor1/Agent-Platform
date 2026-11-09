@@ -147,3 +147,9 @@ def test_supervisor_decision() -> None:
     assert run_check(check, {}, [event(1, BoardEntryPosted(entry=entry))]).passed
     agent_entry = entry.model_copy(update={"author": Actor.agent("a", "Ada")})
     assert not run_check(check, {}, [event(1, BoardEntryPosted(entry=agent_entry))]).passed
+
+
+def test_json_requires_keys_even_for_null() -> None:
+    check = Check(kind="json", artifact="a.json", expected={"nullable": None})
+    assert run_check(check, {"a.json": b'{"nullable":null}'}, []).passed
+    assert not run_check(check, {"a.json": b"{}"}, []).passed

@@ -124,7 +124,9 @@ def _evaluate(check: Check, artifacts: Mapping[str, bytes], events: Sequence[Eve
         return bool(data)
     if check.kind == "json":
         value = json.loads(data)
-        return isinstance(value, dict) and all(value.get(k) == v for k, v in check.expected.items())
+        return isinstance(value, dict) and all(
+            k in value and value[k] == v for k, v in check.expected.items()
+        )
     if check.kind == "text":
         text = data.decode("utf-8").casefold()
         return all(value.casefold() in text for value in check.contains)
