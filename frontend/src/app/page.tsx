@@ -26,6 +26,7 @@ export default function HomePage() {
     router.push(`/sessions/${encodeURIComponent(session.id)}/plan`);
   } });
   function submit(form: HTMLFormElement) {
+    if (create.isPending) return;
     const data = new FormData(form);
     const prompt = String(data.get("prompt") || "").trim();
     const count = Number(data.get("agent_count"));
