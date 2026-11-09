@@ -101,7 +101,8 @@ COPY desktop/ /home/agent/Desktop/
 COPY scripts/start-desktop.sh scripts/start-x11vnc.sh scripts/start-novnc.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
-RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash agent \
+RUN userdel --remove ubuntu 2>/dev/null || true \
+    && useradd --create-home --uid 1000 --user-group --shell /bin/bash agent \
     && mkdir -p /home/agent/Shared \
     && chmod +x /home/agent/Desktop/*.desktop /usr/local/bin/entrypoint.sh \
                 /usr/local/bin/start-desktop.sh /usr/local/bin/start-x11vnc.sh \
