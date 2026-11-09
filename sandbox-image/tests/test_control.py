@@ -252,6 +252,27 @@ def test_input_validation_errors(sandbox: SimpleNamespace) -> None:
     assert status == 422
 
 
+# --- confinement / secret hygiene --------------------------------------------------
+def test_files_confined_to_agent_home(sandbox: SimpleNamespace) -> None:
+    client = sandbox.client
+    for p in ("/etc/passwd", "/home/agent/../../etc/passwd", "/tmp/escape.bin"):
+        status, _ = client.read_file(p)
+        assert status == 422, f"{p} must be rejected"
+    status, _ = client.call("GET", "/files/list?path=%2Fetc")
+    assert status == 422
+    # A symlink planted inside the sandbox home must not become a read lens
+    # into the rest of the container.
+    client.command("ln -sfn /etc/passwd /home/agent/Shared/.pwned-link")
+    status, _ = client.read_file("/home/agent/Shared/.pwned-link")
+    assert status == 422
+    client.command("rm -f /home/agent/Shared/.pwned-link")
+
+
+def test_command_env_has_no_control_token(sandbox: SimpleNamespace) -> None:
+    out = sandbox.client.command("printenv CONTROL_TOKEN || true")
+    assert str(out["stdout"]).strip() == ""
+
+
 # --- noVNC -----------------------------------------------------------------------
 def test_no_vnc_pages_served(sandbox: SimpleNamespace) -> None:
     for suffix in (

@@ -116,6 +116,6 @@ RUN userdel --remove ubuntu 2>/dev/null || true \
 EXPOSE 6080 7000
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=90s --retries=25 \
-    CMD curl -fsS -o /dev/null -H "Authorization: Bearer ${CONTROL_TOKEN}" http://127.0.0.1:7000/health || exit 1
+    CMD curl -fsS -o /dev/null -H @/run/control-auth-header http://127.0.0.1:7000/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -12,6 +12,14 @@ export DISPLAY="${DISPLAY:-:1}"
 export XAUTHORITY="${XAUTHORITY:-/home/agent/.Xauthority}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-runtime}"
 
+# The healthcheck authenticates via this root-only header file instead of
+# putting the token on a command line (process args are world-readable
+# through ps inside the container).
+if [ -n "$CONTROL_TOKEN" ]; then
+  install -m 0600 /dev/null /run/control-auth-header
+  printf 'Authorization: Bearer %s\n' "$CONTROL_TOKEN" > /run/control-auth-header
+fi
+
 mkdir -p "$XDG_RUNTIME_DIR" /var/log/supervisor
 chown agent:agent "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"

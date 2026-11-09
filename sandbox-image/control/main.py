@@ -260,7 +260,7 @@ async def files_write(
     file: UploadFile = File(...),
 ) -> JSONResponse:
     try:
-        files_lib.validate_absolute(path)
+        files_lib.check_contained(path, must_exist=False)
     except ValueError as exc:
         raise _error(422, str(exc)) from exc
 

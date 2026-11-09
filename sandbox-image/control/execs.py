@@ -65,6 +65,10 @@ def validate_command(cmd: str, timeout_s: int | None) -> int:
 
 def _command_env() -> dict[str, str]:
     env = dict(os.environ)
+    # The control token must not be handed to model-supplied commands; the
+    # agent user could read it back with printenv (it remains a per-container
+    # capability by design, but there is no reason to re-export it here).
+    env.pop("CONTROL_TOKEN", None)
     env.setdefault("HOME", "/home/agent")
     env["USER"] = "agent"
     env["LOGNAME"] = "agent"

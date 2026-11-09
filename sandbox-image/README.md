@@ -76,6 +76,13 @@ Given the published 6080 port:
 | GET    | `/files/read`     | `?path=/abs/path`            | raw bytes (≤50 MB)              |
 | GET    | `/files/list`     | `?path=/abs/dir`             | `{path,entries:[...]}`          |
 
+File paths must be absolute **and stay under `/home/agent`** (the agent's
+home): traversal such as `/home/agent/../..` is rejected and symlinked paths
+are resolved before use. The root can be moved with `SANDBOX_FILE_ROOT` if a
+provider needs a different layout. `/command` still grants full agent-level
+shell access by design — the container is the security boundary, not the file
+API.
+
 `/command` runs through `bash -lc` **as the `agent` user** with cwd
 `/home/agent`; stdout/stderr are truncated to 8 KB each and the whole
 process group is killed on timeout (exit code 124, `timed_out: true`).
@@ -124,7 +131,21 @@ both noVNC entry URLs are served.
   bearer token on every request (constant-time compare). Do not publish
   port 7000 or 6080 on anything but 127.0.0.1; the VNC port (5900) is bound
   to localhost inside the container and is unreachable from the host or the
-  sandbox network.
+  sandbox network. Inside the container x11vnc listens on `127.0.0.1:5900`
+  only; websockify (6080) and the control server (7000) must bind
+  `0.0.0.0` for Docker port publishing to work, which is why publishing
+  them on 127.0.0.1 host-side is mandatory.
+- Token hygiene inside the container: the healthcheck authenticates through
+  a root-only header file (`/run/control-auth-header`), not a command line
+  (process args are world-readable via `ps`), and `/command` strips
+  `CONTROL_TOKEN` from the environment it hands to model-supplied
+  commands. The token is still a per-container capability the `agent` user
+  could locate (e.g. `/proc` of the control server) — by design, it guards
+  the container's own control API and must never be a user secret.
+- No secrets are baked into the image: no token, key or credential in any
+  layer (the only build args are public), the Xauthority cookie is
+  generated at container start, and nothing secret is ever passed into a
+  sandbox (AGENTS.md §5).
 - No secrets ever belong inside the sandbox: no API keys in env, files or
   commands (AGENTS.md §5).
 - Untrusted content is expected inside the desktop (web pages, files,

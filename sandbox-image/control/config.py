@@ -34,3 +34,8 @@ MAX_COMBO_CHARS = 64
 DEFAULT_COMMAND_TIMEOUT_S = 60
 MAX_COMMAND_TIMEOUT_S = 600
 MAX_COMMAND_CHARS = 100_000
+
+# The file-transfer APIs are confined to this root (the agent's home).
+# /command still grants full agent-level shell access by design; this is
+# defense-in-depth for the structured file endpoints, not the real boundary.
+FILE_ROOT = os.environ.get("SANDBOX_FILE_ROOT", "/home/agent").rstrip("/") or "/"
