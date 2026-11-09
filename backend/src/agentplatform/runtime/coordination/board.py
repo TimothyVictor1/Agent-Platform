@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from agentplatform.contracts.agent import Agent
 from agentplatform.contracts.board import BoardEntry, BoardEntryDraft
 from agentplatform.contracts.common import Actor, BoardEntryKind, BoardEntryStatus
 
@@ -74,9 +75,20 @@ class BoardService(Protocol):
         limit: int = 10,
         viewer_agent_id: str | None = None,
     ) -> list[BoardEntry]:
-        """Full-text search on title + body with filters, newest first. When
-        ``viewer_agent_id`` is set, direct messages not addressed to (or written by)
-        that agent are excluded."""
+        """Entries of a session matching the filters. With ``query`` (Postgres
+        full-text search on title + body, web-search syntax) the best match comes
+        first; without it the newest first. When ``viewer_agent_id`` is set, direct
+        messages not addressed to (or written by) that agent are excluded."""
+        ...
+
+    async def get_by_seq(self, session_id: str, seq: int) -> BoardEntry:
+        """The entry whose ``seq`` is ``seq`` (digest lines show ``#seq``). Raise
+        ``NotFoundError`` if the session has no such entry."""
+        ...
+
+    async def find_agent(self, session_id: str, name: str) -> Agent | None:
+        """The agent of the session called ``name`` (case-insensitive), or ``None``.
+        Used by the ``message`` tool to address teammates by name."""
         ...
 
     async def entries_after(
