@@ -1,13 +1,13 @@
 # Local infrastructure shared by every worktree (fixed project name, so all
 # Superset worktrees use the same containers; each worktree gets its own database,
 # see APP_DB_NAME and `make db-up`). Dev-only credentials; never expose these ports.
-# If 5432/6379 are taken (e.g. a Homebrew Postgres), set APP_PG_PORT / APP_REDIS_PORT
-# in .env and point DATABASE_URL / REDIS_URL at those ports.
+# If 5432 is taken (e.g. a Homebrew Postgres), set APP_PG_PORT in .env and point
+# DATABASE_URL at that port (APP_REDIS_PORT works the same way for 6379).
 name: agentplatform
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: agentplatform
       POSTGRES_PASSWORD: agentplatform  # local dev only
@@ -23,7 +23,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:${APP_REDIS_PORT:-6379}:6379"
