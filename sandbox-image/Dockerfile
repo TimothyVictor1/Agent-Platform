@@ -74,8 +74,9 @@ ARG FIREFOX_VERSION=latest
 RUN set -eux; \
     v="${FIREFOX_VERSION}"; \
     if [ "$v" = "latest" ]; then \
-      v="$(curl -fsSL https://product-details.mozilla.org/1.0/firefox_versions.json | jq -r '.FIREFOX_ESR')"; \
+      v="$(curl -fsSL --retry 4 --retry-delay 2 https://product-details.mozilla.org/1.0/firefox_versions.json | jq -r '.FIREFOX_ESR')"; \
     fi; \
+    [ -n "$v" ] && [ "$v" != "null" ] || { echo "could not resolve FIREFOX_ESR version" >&2; exit 1; }; \
     case "$(uname -m)" in \
       x86_64) arch=linux-x86_64 ;; \
       aarch64) arch=linux-aarch64 ;; \
