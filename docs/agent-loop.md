@@ -32,7 +32,7 @@ TaskOutcome(status="submitted" | "failed" | "stopped",
 | `reason` | Meaning | Suggested scheduler reaction |
 |---|---|---|
 | `fail_task` | The model gave up (`detail` holds its reason and what it tried) | retry or hand to the Supervisor |
-| `budget` | `max_steps_per_task` or a session budget (`BudgetMonitor.exceeded()`) was hit | fail with reason `budget` (§12.8) |
+| `budget` | `max_steps_per_task` or a session budget (`BudgetMonitor.exceeded()`) was hit, or the mandatory prompt content exceeds `prompt_budget_tokens` | fail with reason `budget` (§12.8) |
 | `model_error` | 3 consecutive model failures | retry later |
 | `sandbox_lost` | `SandboxExpiredError` while observing | re-create/reconnect sandbox, requeue |
 | `sandbox_error` | 3 consecutive other sandbox failures | same |
@@ -168,10 +168,14 @@ user       "Step k of max B. Time used m min." + [system note] lines
 - Every 20 steps, steps older than the last 12 are folded into the summary by the
   `Summarizer`. Until then they appear as compact lines.
 - The prompt budget is `prompt_budget_tokens` (24k for local models, 60k for
-  cloud), estimated as 4 chars ≈ 1 token plus `image_tokens` per image. When over
-  budget, the loop trims oldest images first, then oldest full steps (they become
-  compact lines), then compact lines, then the digest. The current screenshot is
-  never trimmed.
+  cloud), estimated as 4 chars ≈ 1 token plus `image_tokens` per image plus the
+  tool schemas sent with the request. The mandatory content (system prompt, tool
+  schemas, current header, notebook and screenshot(s)) is reserved first; if it
+  alone exceeds the budget, `build` raises `ContextBudgetError` and the task fails
+  with reason `budget`. When over budget, the loop trims oldest images first, then
+  oldest full steps (they become compact lines), then compact lines, then the
+  digest. The current screenshot is never trimmed. If the digest was cut, the
+  digest cursor does not advance, so the cut entries reappear in the next step.
 
 ## Stuck detection
 

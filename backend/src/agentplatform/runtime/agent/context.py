@@ -44,13 +44,16 @@ from agentplatform.contracts.model_io import (
     Part,
     TextPart,
     ToolCall,
+    ToolSpec,
 )
 from agentplatform.contracts.task import Task
+from agentplatform.errors import BudgetExceededError
 from agentplatform.models.base import ModelClient
 
 __all__ = [
     "CHARS_PER_TOKEN",
     "RESUME_NOTE",
+    "ContextBudgetError",
     "ContextBuilder",
     "ContextSettings",
     "ModelSummarizer",
@@ -62,6 +65,7 @@ __all__ = [
     "UpstreamValue",
     "describe_call",
     "estimate_tokens",
+    "estimate_tool_tokens",
     "load_system_template",
     "screenshot_size",
     "step_line",
@@ -161,8 +165,25 @@ def step_line(step: int, calls: Sequence[ToolCall], results: Sequence[str], note
     return f"[step {step}] " + "; ".join(items)
 
 
-def estimate_tokens(messages: Sequence[Message], image_tokens: int) -> int:
-    """Approximate prompt size: 4 characters per token plus ``image_tokens`` per image."""
+class ContextBudgetError(BudgetExceededError):
+    """The mandatory part of the prompt (system message, tool schemas, current step
+    header, notebook and screenshot(s)) does not fit ``prompt_budget_tokens`` even
+    with all history and the digest trimmed away."""
+
+    code = "context_budget_exceeded"
+
+
+def estimate_tool_tokens(tools: Sequence[ToolSpec]) -> int:
+    """Approximate size of the tool definitions sent with the request."""
+    chars = sum(len(json.dumps(t.model_dump(mode="json"), default=str)) for t in tools)
+    return chars // CHARS_PER_TOKEN + MESSAGE_OVERHEAD_TOKENS * len(tools)
+
+
+def estimate_tokens(
+    messages: Sequence[Message], image_tokens: int, tools: Sequence[ToolSpec] = ()
+) -> int:
+    """Approximate prompt size: 4 characters per token plus ``image_tokens`` per image,
+    plus the tool schemas (``estimate_tool_tokens``)."""
     chars = 0
     images = 0
     for msg in messages:
@@ -174,7 +195,10 @@ def estimate_tokens(messages: Sequence[Message], image_tokens: int) -> int:
         for call in msg.tool_calls or ():
             chars += len(call.name) + len(json.dumps(call.arguments, default=str))
     return (
-        chars // CHARS_PER_TOKEN + images * image_tokens + MESSAGE_OVERHEAD_TOKENS * len(messages)
+        chars // CHARS_PER_TOKEN
+        + images * image_tokens
+        + MESSAGE_OVERHEAD_TOKENS * len(messages)
+        + estimate_tool_tokens(tools)
     )
 
 
@@ -391,9 +415,26 @@ class ContextBuilder:
         digest: str = "",
         notebook: str = "",
         extra_image: ImagePart | None = None,
+        tools: Sequence[ToolSpec] = (),
     ) -> list[Message]:
-        """Messages for the current step, trimmed to the prompt budget."""
+        """Messages for the current step, trimmed to the prompt budget (``tools`` are
+        the specs sent with the request; they count against the budget).
+
+        Raises ``ContextBudgetError`` if the mandatory content alone does not fit.
+        """
         s = self.settings
+        # Reserve the mandatory content first: with everything trimmable removed.
+        floor = estimate_tokens(
+            self._render(_Trim(0, 0, 0, ""), header, image, notebook, extra_image),
+            s.image_tokens,
+            tools,
+        )
+        if floor > s.prompt_budget_tokens:
+            log.error("context_over_budget", tokens=floor, budget=s.prompt_budget_tokens)
+            raise ContextBudgetError(
+                f"the prompt needs at least {floor} tokens (system prompt, tool schemas, "
+                f"current screen) but the budget is {s.prompt_budget_tokens}"
+            )
         trim = _Trim(
             images=max(0, s.max_images_in_context - 1),
             full=min(s.full_history_steps, len(self.history)),
@@ -402,11 +443,9 @@ class ContextBuilder:
         )
         while True:
             messages = self._render(trim, header, image, notebook, extra_image)
-            tokens = estimate_tokens(messages, s.image_tokens)
+            tokens = estimate_tokens(messages, s.image_tokens, tools)
             if tokens <= s.prompt_budget_tokens or not self._shrink(trim):
                 break
-        if tokens > s.prompt_budget_tokens:
-            log.warning("context_over_budget", tokens=tokens, budget=s.prompt_budget_tokens)
         self.digest_included = trim.digest == digest
         self.last_trim = {
             "tokens": tokens,

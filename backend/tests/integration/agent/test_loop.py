@@ -861,6 +861,20 @@ async def test_lease_lost_during_coordination_rejects_submit(harness: Any) -> No
     assert out.result is None
 
 
+async def test_irreducible_prompt_fails_task_with_budget(harness: Any) -> None:
+    """T06 review #7: an oversized mandatory prompt is a typed budget failure, not
+    a model call that is bound to overflow the context window."""
+    h = harness([click(1)], context=ContextSettings(prompt_budget_tokens=1000))
+    out = await h.run()
+    assert out.status == "failed"
+    assert out.reason == "budget"
+    assert "budget is" in out.detail
+    assert h.model.calls == []
+    errors = h.events("agent.error")
+    assert len(errors) == 1
+    assert not errors[0].payload.recoverable
+
+
 # -- digest and modes ----------------------------------------------------------------------
 
 

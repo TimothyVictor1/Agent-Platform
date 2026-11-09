@@ -8,10 +8,11 @@ import pytest
 
 from agentplatform.contracts.artifact import Artifact
 from agentplatform.contracts.common import Actor, CoordinateMode, utcnow
-from agentplatform.contracts.model_io import ImagePart, Message, TextPart, ToolCall
+from agentplatform.contracts.model_io import ImagePart, Message, TextPart, ToolCall, ToolSpec
 from agentplatform.contracts.task import OutputSpec
 from agentplatform.errors import ModelError
 from agentplatform.runtime.agent.context import (
+    ContextBudgetError,
     ContextBuilder,
     ContextSettings,
     ModelSummarizer,
@@ -307,6 +308,53 @@ def test_digest_included_flag(digest: str, included: bool) -> None:
     b = builder(settings=ContextSettings(prompt_budget_tokens=1000, image_tokens=500))
     b.build(header="now", image=IMG, digest=digest)
     assert b.digest_included is included
+
+
+def big_tools(n: int = 5, chars: int = 4000) -> list[ToolSpec]:
+    return [
+        ToolSpec(
+            name=f"tool_{i}",
+            description="d" * chars,
+            parameters={"type": "object", "properties": {}},
+        )
+        for i in range(n)
+    ]
+
+
+def test_estimate_includes_tool_schemas() -> None:
+    msgs = [Message.text("user", "a" * 400)]
+    assert estimate_tokens(msgs, 1000, big_tools()) >= estimate_tokens(msgs, 1000) + 5000
+
+
+def test_large_tool_schemas_count_against_budget() -> None:
+    """T06 review #7: tool schemas are part of the prompt."""
+    settings = ContextSettings(max_images_in_context=3, prompt_budget_tokens=9000,
+                               image_tokens=1500)  # fmt: skip
+    tools = big_tools()  # ~5000 tokens
+    b = builder(settings=settings)
+    for step in range(1, 4):
+        b.add_step(record(step))
+    msgs = b.build(header="now", image=IMG, tools=tools)
+    assert estimate_tokens(msgs, 1500, tools) <= 9000
+    assert b.last_trim["tokens"] == estimate_tokens(msgs, 1500, tools)
+    assert images_in(msgs) < 3  # history images were trimmed to make room for the tools
+
+
+def test_oversized_system_prompt_raises_budget_error() -> None:
+    values = [UpstreamValue("T0", f"k{i}", "v" * 1400) for i in range(30)]
+    b = builder(  # ~10k tokens of upstream inputs in the system prompt alone
+        settings=ContextSettings(prompt_budget_tokens=6000, image_tokens=500),
+        upstream=UpstreamInputs(values=values),
+    )
+    with pytest.raises(ContextBudgetError, match="budget is 6000"):
+        b.build(header="now", image=IMG)
+
+
+def test_oversized_tool_schemas_raise_budget_error() -> None:
+    b = builder(settings=ContextSettings(prompt_budget_tokens=4000, image_tokens=500))
+    b.build(header="now", image=IMG)  # fits without tools
+    with pytest.raises(ContextBudgetError):
+        b.build(header="now", image=IMG, tools=big_tools())
 
 
 # -- helpers -----------------------------------------------------------------------------

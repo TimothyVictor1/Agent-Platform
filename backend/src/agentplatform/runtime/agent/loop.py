@@ -93,6 +93,7 @@ from agentplatform.runtime.agent.actions import (
 )
 from agentplatform.runtime.agent.context import (
     RESUME_NOTE,
+    ContextBudgetError,
     ContextBuilder,
     ContextSettings,
     RosterEntry,
@@ -811,13 +812,21 @@ class AgentRuntime:
             extra = ImagePart(jpeg_bytes=run.pending_image, width=w, height=h)
         hidden = frozenset({"submit_result"}) if step <= cfg.submit_hidden_steps else frozenset()
         specs = self.registry.specs(hidden=hidden)
-        messages = run.builder.build(
-            header=header,
-            image=image,
-            digest=digest.text,
-            notebook=self.state.notebook,
-            extra_image=extra,
-        )
+        try:
+            messages = run.builder.build(
+                header=header,
+                image=image,
+                digest=digest.text,
+                notebook=self.state.notebook,
+                extra_image=extra,
+                tools=specs,
+            )
+        except ContextBudgetError as exc:
+            # Irreducible: no amount of trimming makes the next step fit.
+            await self._emit(
+                AgentError(agent_id=self.agent.id, error=exc.detail[:500], recoverable=False)
+            )
+            return self._outcome(run, "failed", reason="budget", detail=exc.detail[:500])
 
         # 3. model
         try:
