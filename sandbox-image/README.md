@@ -9,10 +9,16 @@ mousepad and a small FastAPI **control server** (port 7000) that the
 
 ```sh
 docker build -t agentplatform/desktop:latest sandbox-image
-# pinned/reproducible Firefox layer:
+# bump the pinned Firefox ESR deliberately (the Dockerfile default is a
+# fixed release, verified against Mozilla's SHA512SUMS for that release):
 docker build -t agentplatform/desktop:latest \
-  --build-arg FIREFOX_VERSION=153.5.1esr sandbox-image
+  --build-arg FIREFOX_VERSION=153.6.0esr sandbox-image
 ```
+
+Both base images are `ubuntu:24.04` pinned **by digest**, and the
+control-server venv is installed with `pip --require-hashes` (every wheel
+in `requirements-control.txt` is version- and hash-pinned, including the
+transitive dependencies).
 
 Multi-arch: the same Dockerfile builds on `linux/amd64` and `linux/arm64`
 (Firefox ESR tarballs are fetched per architecture; everything else comes
@@ -25,7 +31,8 @@ TOKEN=$(openssl rand -hex 32)
 docker run -d --name ap-desktop \
   -e CONTROL_TOKEN="$TOKEN" \
   -p 127.0.0.1::7000 -p 127.0.0.1::6080 \
-  --cap-drop ALL --security-opt no-new-privileges \
+  --cap-drop ALL --cap-add SETUID --cap-add SETGID \
+  --security-opt no-new-privileges \
   --memory 4g --cpus 2 \
   agentplatform/desktop:latest
 docker port ap-desktop          # find the random host ports
@@ -35,9 +42,10 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:<7000-port>/health
 `CONTROL_TOKEN` must be set at run time: the provider generates a random
 token per container (`secrets.token_urlsafe`). **With no token the control
 server fails closed** — every request, including `/health`, returns 401.
-The token is a per-container runtime capability, not a user secret; it must
-never contain or grant access to API keys (nothing secret is ever sent into
-a sandbox).
+The entrypoint relocates the token out of the environment before starting
+supervisord (see below), and `/command` never re-exports it. The token is a
+per-container runtime capability, not a user secret; it must never contain
+or grant access to API keys (nothing secret is ever sent into a sandbox).
 
 ### Ports
 
@@ -47,7 +55,12 @@ a sandbox).
 | 6080             | noVNC (browser streaming, served by websockify)     |
 
 Publish **only on 127.0.0.1** with random host ports (as above; the
-provider does this automatically).
+provider does this automatically). Note that **noVNC on port 6080 has no
+password** (it is the unauthenticated `vnc.html` viewer plus a
+view-only-cookie option, not an auth mechanism): its only protection is
+that the port is published on 127.0.0.1 and is therefore reachable solely
+from the host's own user session. Never publish it on a routable
+interface; use the view-only URL for read-only observation.
 
 ### noVNC URLs
 
@@ -110,11 +123,18 @@ APP_DOCKER=1 python3 -m pytest sandbox-image/tests -q
 APP_DOCKER=1 APP_TEST_IMAGE=agentplatform/desktop:latest APP_TEST_BUILD=1
 ```
 
-The suite builds the image if missing, starts one container, and checks:
-health, auth (401 without/with a wrong token), screenshot PNG is 1280x800,
-typing into mousepad then reading the file back through `/command`,
-keyboard-combo editing, file write/read/list roundtrip, 404/422/413 file
-validation, command truncation and timeout kill, scroll behaviour, and that
+The suite builds the image if missing, starts one container **with the
+hardened flags the provider uses** (`--cap-drop ALL --cap-add SETUID
+--cap-add SETGID --security-opt no-new-privileges`), and checks: health,
+auth (401 without/with a wrong token, `WWW-Authenticate` challenge),
+screenshot PNG is 1280x800, typing into mousepad then reading the file
+back through `/command`, keyboard-combo editing, named keys (BackSpace/
+Return editing the saved file), pointer move/drag, right and double
+click, file write/read/list roundtrip (including a trailing-slash list
+and list-on-a-file 404), 404/422/413 file validation, command truncation
+and timeout kill, backgrounded commands returning promptly, the minimal
+capability set plus a green healthcheck under those flags, the token
+being absent from every process environment, scroll behaviour, and that
 both noVNC entry URLs are served.
 
 ## Security notes (read before exposing anything)
@@ -124,9 +144,15 @@ both noVNC entry URLs are served.
   boundary; use the `e2b` provider when isolation matters.
 - **Never mount host volumes** into a sandbox container
   (`-v /host/...:/...` defeats the isolation entirely).
-- **Never run privileged** (`--privileged`), never add capabilities
-  (`--cap-add`). The provider runs `--cap-drop ALL --security-opt
-  no-new-privileges` with memory/CPU caps; preserve that.
+- **Never run privileged** (`--privileged`). The provider runs the image
+  with exactly `--cap-drop ALL --cap-add SETUID --cap-add SETGID
+  --security-opt no-new-privileges` plus memory/CPU caps; preserve that
+  set. The two capabilities are the minimal set the container needs:
+  root (supervisord) only *drops* privileges to the `agent` user, which
+  requires SETUID/SETGID even under `--cap-drop ALL`. Everything else is
+  prepared at build time (all ownership is fixed in the Dockerfile, so
+  the runtime needs neither `CHOWN` nor `DAC_OVERRIDE` — verified by the
+  test suite, which always runs the container with these exact flags).
 - The control server is the only API into the container and requires the
   bearer token on every request (constant-time compare). Do not publish
   port 7000 or 6080 on anything but 127.0.0.1; the VNC port (5900) is bound
@@ -135,13 +161,20 @@ both noVNC entry URLs are served.
   only; websockify (6080) and the control server (7000) must bind
   `0.0.0.0` for Docker port publishing to work, which is why publishing
   them on 127.0.0.1 host-side is mandatory.
-- Token hygiene inside the container: the healthcheck authenticates through
-  a root-only header file (`/run/control-auth-header`), not a command line
-  (process args are world-readable via `ps`), and `/command` strips
-  `CONTROL_TOKEN` from the environment it hands to model-supplied
-  commands. The token is still a per-container capability the `agent` user
-  could locate (e.g. `/proc` of the control server) — by design, it guards
-  the container's own control API and must never be a user secret.
+- Token hygiene inside the container: the entrypoint **relocates the token
+  out of the process environment** — it writes `/run/control-token` (owner
+  `agent`, mode 0400; override the path with `CONTROL_TOKEN_FILE`) from
+  `$CONTROL_TOKEN` and then unsets the variable before exec'ing
+  supervisord, so no process environment carries the token and `ps` never
+  sees it either. The control server reads the token from that file
+  (`CONTROL_TOKEN_FILE`, falling back to `$CONTROL_TOKEN` for local runs
+  without the entrypoint). The healthcheck authenticates through a
+  root-only header file (`/run/control-auth-header`), not a command line.
+  Note that **the `agent` user can still read the token** (it owns the
+  token file) — by design: the token is a per-container capability that
+  guards the container's own control API, not a user secret, and must
+  never be a user secret. `/command` additionally strips `CONTROL_TOKEN`
+  from the environment it hands to model-supplied commands.
 - No secrets are baked into the image: no token, key or credential in any
   layer (the only build args are public), the Xauthority cookie is
   generated at container start, and nothing secret is ever passed into a
