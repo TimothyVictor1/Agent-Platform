@@ -92,13 +92,13 @@ def test_slightly_outside_is_clamped_into_the_screen(
 
 
 OUT_OF_RANGE: list[tuple[CoordinateMode, float, float, str]] = [
-    ("absolute", 2049, 0, "1024x640 screenshot"),
+    ("absolute", 2049, 0, "x=2049 is outside the screen; use pixels inside the 1024x640"),
     ("absolute", 0, 1281, "y=1281"),
-    ("absolute", -5.1, 0, "x=-5.1"),
+    ("absolute", -5.1, 0, "x=-5.1 is negative; use pixels inside the 1024x640"),
     ("absolute", 5000, 10, "outside the screen"),
     ("normalized_1000", 2001, 0, "0..1000"),
-    ("normalized_1000", 0, -6, "y=-6"),
-    ("relative", 0, -0.01, "decimals 0..1"),
+    ("normalized_1000", 0, -6, "y=-6 is negative; use integers 0..1000"),
+    ("relative", 0, -0.01, "y=-0.01 is negative; use decimals 0..1"),
     ("relative", 2.5, 0, "did you give pixels?"),
     ("relative", 512, 300, "did you give pixels?"),
 ]

@@ -176,7 +176,9 @@ def _fraction(
         span = 1.0
     else:
         span = float(obs_extent)
-    if value < -NEGATIVE_SLACK[mode] or value > OUT_OF_RANGE_FACTOR * span:
+    if value < -NEGATIVE_SLACK[mode]:
+        raise CoordinateError(f"{name}={value:g} is negative; {_range_help(mode, obs)}")
+    if value > OUT_OF_RANGE_FACTOR * span:
         hint = " (did you give pixels?)" if mode == "relative" and value > 2 else ""
         raise CoordinateError(
             f"{name}={value:g} is outside the screen{hint}; {_range_help(mode, obs)}"
