@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "@/lib/api";
+import { session } from "@/mocks/fixtures";
+import { planFixture, reviewCommand } from "@/mocks/plan";
 import { nodeErrors } from "./validation";
 import { PlanReview } from "./plan-review";
 
@@ -26,6 +28,89 @@ beforeEach(() => { localStorage.clear(); push.mockClear(); });
 afterEach(() => vi.restoreAllMocks());
 
 describe("Plan review", () => {
+  it("loads a newer server plan automatically when the draft has no unsaved edits", async () => {
+    await ready(); await select();
+    const tasks = structuredClone(planFixture.tasks); tasks[0].title = "Updated on the server";
+    reviewCommand(session, "plan", tasks);
+    await waitFor(() => expect(screen.getByLabelText("Title")).toHaveValue("Updated on the server"));
+    expect(screen.getByText("Version 2")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Server plan changed" })).not.toBeInTheDocument();
+  });
+  it.each(["Load latest", "Keep my edits"])("previews a newer server plan alongside unsaved edits and supports %s", async choice => {
+    const save = vi.spyOn(api, "updatePlan"); await ready(); await select();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "My unsaved title" } });
+    const tasks = structuredClone(planFixture.tasks); tasks[0].title = "Server title";
+    reviewCommand(session, "plan", tasks);
+    const banner = await screen.findByRole("region", { name: "Server plan changed" });
+    expect(banner).toHaveTextContent("Plan changed on the server (v2)");
+    expect(within(banner).getByRole("region", { name: "Refinement diff" })).toHaveTextContent("My unsaved title");
+    expect(banner).toHaveTextContent("Server title");
+    expect(screen.getByRole("button", { name: "Approve plan" })).toBeDisabled();
+    await userEvent.click(within(banner).getByRole("button", { name: choice }));
+    if (choice === "Load latest") await select();
+    expect(screen.getByLabelText("Title")).toHaveValue(choice === "Load latest" ? "Server title" : "My unsaved title");
+    expect(screen.queryByRole("region", { name: "Server plan changed" })).not.toBeInTheDocument();
+    if (choice === "Keep my edits") {
+      await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
+      await screen.findByText("Plan saved.");
+      expect(save.mock.calls[0][1].base_version).toBe(2);
+    }
+  });
+  it("recovers from a 409 using the same latest-plan banner", async () => {
+    vi.spyOn(api, "updatePlan").mockImplementationOnce(async () => {
+      const tasks = structuredClone(planFixture.tasks); tasks[0].title = "Concurrent server edit";
+      reviewCommand(session, "plan", tasks);
+      throw new ApiError({ type: "about:blank", title: "Plan version changed", status: 409, detail: null, instance: null, errors: null });
+    });
+    await ready(); await select();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Local edit" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
+    const banner = await screen.findByRole("region", { name: "Server plan changed" });
+    expect(banner).toHaveTextContent("Plan changed on the server (v2)");
+    await userEvent.click(within(banner).getByRole("button", { name: "Load latest" }));
+    await select(); expect(screen.getByLabelText("Title")).toHaveValue("Concurrent server edit");
+    expect(screen.getByRole("button", { name: "Approve plan" })).toBeEnabled();
+  });
+  it("confirms reordered object keys and adopts the actual server copy", async () => {
+    const save = vi.spyOn(api, "updatePlan").mockImplementationOnce(async (_id, body) => {
+      const tasks = body.tasks.map(({ title, ...rest }) => ({ ...rest, title }));
+      reviewCommand(session, "plan", tasks);
+      return { command_id: "reordered-plan", session_id: session.id };
+    });
+    await ready(); await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
+    await screen.findByText("Plan saved.");
+    expect(screen.queryByRole("region", { name: "Server plan changed" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(Object.keys(save.mock.calls[1][1].tasks[0]).at(-1)).toBe("title");
+    await waitFor(() => expect(screen.getByText("Version 3")).toBeVisible());
+  });
+  it("previews a different save result without approving or overwriting the local draft", async () => {
+    const approve = vi.spyOn(api, "approve");
+    vi.spyOn(api, "updatePlan").mockImplementationOnce(async (_id, body) => {
+      reviewCommand(session, "plan", body.tasks.map((task, i) => i === 0 ? { ...task, title: "Server-normalized title" } : task));
+      return { command_id: "normalized-plan", session_id: session.id };
+    });
+    await ready(); await select();
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Local title" } });
+    await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
+    const banner = await screen.findByRole("region", { name: "Server plan changed" });
+    expect(banner).toHaveTextContent("Server-normalized title"); expect(banner).toHaveTextContent("Local title");
+    expect(approve).not.toHaveBeenCalled();
+    await userEvent.click(within(banner).getByRole("button", { name: "Load latest" }));
+    await select(); expect(screen.getByLabelText("Title")).toHaveValue("Server-normalized title");
+  });
+  it("clears server errors after Remove criterion changes the rejected task snapshot", async () => {
+    vi.spyOn(api, "updatePlan").mockRejectedValueOnce(new ApiError({ type: "about:blank", title: "Invalid plan", status: 422, detail: null, instance: null, errors: [{ task_key: "T1", message: "Rejected criterion", code: "blank_criterion", loc: null, details: null }] }));
+    await ready(); await select(); await userEvent.click(screen.getByRole("button", { name: "Add criterion" }));
+    fireEvent.change(screen.getByLabelText("Criterion 2"), { target: { value: "Check to remove" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "Node T1 errors" })).getByText("Rejected criterion")).toBeVisible());
+    await userEvent.click(screen.getByRole("button", { name: "Remove criterion 2" }));
+    expect(screen.queryByText("Rejected criterion")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve plan" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Clear server errors after correcting" })).not.toBeInTheDocument();
+  });
   it.each(["metaKey", "ctrlKey"])("refines instead of approving on %s+Enter in the refine box", async modifier => {
     const refine = vi.spyOn(api, "refine"); const approve = vi.spyOn(api, "approve"); await ready();
     const input = screen.getByLabelText("Refine with the planner");

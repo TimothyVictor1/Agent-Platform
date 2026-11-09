@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Plan, TaskDraft } from "@/contracts/generated";
-import { createDraftStore, diffPlans } from "./draft-store";
+import { canonicalStringify, createDraftStore, diffPlans } from "./draft-store";
 import { cycleEdges, fieldErrors, nodeErrors, schemaError, validatePlan } from "./validation";
 
 export const draftTask = (key: string, patch: Partial<TaskDraft> = {}): TaskDraft => ({ key, title: `Task ${key}`, goal: "Produce a checked result", acceptance_criteria: ["Result is visible"], depends_on: [], inputs: [], outputs: [], tags: [], suggested_tools: [], max_attempts: 2, ...patch });
@@ -36,6 +36,20 @@ describe("plan validation", () => {
 });
 
 describe("draft state", () => {
+  it("canonicalizes nested object keys while keeping array order significant", () => {
+    expect(canonicalStringify({ b: { d: 1, c: 2 }, a: [1, 2] })).toBe(canonicalStringify({ a: [1, 2], b: { c: 2, d: 1 } }));
+    expect(canonicalStringify([1, 2])).not.toBe(canonicalStringify([2, 1]));
+  });
+  it("adopts newer clean plans and preserves invalid schema text as an unsaved edit", () => {
+    const source = plan([draftTask("A", { outputs: [{ key: "x", kind: "json", description: "", json_schema: null }] })]);
+    const store = createDraftStore(); store.getState().initialize(source);
+    const newer = { ...source, version: 2, proposal: { ...source.proposal, rationale: "New rationale" } };
+    store.getState().initialize(newer);
+    expect(store.getState().base?.version).toBe(2); expect(store.getState().proposal?.rationale).toBe("New rationale");
+    store.getState().setSchema("A", 0, "{");
+    store.getState().initialize({ ...newer, version: 3 });
+    expect(store.getState().schemaText["A:0"]).toBe("{"); expect(store.getState().conflict?.version).toBe(3);
+  });
   it("updates the store while keeping the server snapshot untouched", () => {
     const source = plan([draftTask("A")]); const store = createDraftStore(); store.getState().initialize(source);
     store.getState().update("A", { title: "Edited", acceptance_criteria: ["Second", "First"] });

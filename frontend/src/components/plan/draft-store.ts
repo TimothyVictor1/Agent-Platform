@@ -1,13 +1,26 @@
 import { createStore } from "zustand/vanilla";
 import type { FieldChange, Plan, PlanDiff, PlanProposal, TaskDraft } from "@/contracts/generated";
 
+/** Ignore object-key order while preserving ordered task, criterion and input arrays. */
+export function canonicalStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+      return Object.fromEntries(Object.entries(item).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0));
+    }
+    return item;
+  });
+}
+
 export function createDraftStore() {
   return createStore<{
     proposal: PlanProposal | null;
     base: Plan | null;
+    conflict: Plan | null;
     schemaText: Record<string, string>;
     schemaErrors: Record<string, string>;
     initialize: (plan: Plan) => void;
+    load: (plan: Plan) => void;
+    changedOnServer: (plan: Plan) => void;
     replace: (proposal: PlanProposal) => void;
     saved: (plan: Plan) => void;
     update: (key: string, patch: Partial<TaskDraft>) => void;
@@ -18,10 +31,18 @@ export function createDraftStore() {
     setSchema: (key: string, index: number, text: string) => void;
     removeOutput: (key: string, index: number) => void;
   }>()((set, get) => ({
-    proposal: null, base: null, schemaText: {}, schemaErrors: {},
-    initialize: plan => { if (!get().proposal) set({ proposal: structuredClone(plan.proposal), base: plan }); },
+    proposal: null, base: null, conflict: null, schemaText: {}, schemaErrors: {},
+    initialize: plan => {
+      const { proposal, base, conflict, schemaErrors } = get();
+      if (!proposal || !base) { get().load(plan); return; }
+      if (plan.version <= base.version || (conflict && plan.version <= conflict.version)) return;
+      if (canonicalStringify(proposal.tasks) !== canonicalStringify(base.proposal.tasks) || Object.keys(schemaErrors).length > 0) get().changedOnServer(plan);
+      else get().load(plan);
+    },
+    load: plan => set({ proposal: structuredClone(plan.proposal), base: plan, conflict: null, schemaText: {}, schemaErrors: {} }),
+    changedOnServer: plan => set({ conflict: plan }),
     replace: proposal => set({ proposal: structuredClone(proposal), schemaText: {}, schemaErrors: {} }),
-    saved: plan => set({ base: plan }),
+    saved: plan => set({ base: plan, conflict: null }),
     update: (key, patch) => set(state => ({ proposal: state.proposal && { ...state.proposal, tasks: state.proposal.tasks.map(t => t.key === key ? { ...t, ...patch } : t) } })),
     add: () => {
       const proposal = get().proposal;
@@ -80,7 +101,7 @@ export function diffPlans(before: PlanProposal, after: PlanProposal): PlanDiff {
     removed: before.tasks.filter(t => !after.tasks.some(next => next.key === t.key)).map(t => t.key),
     changed: after.tasks.flatMap(task => {
       const previous = old.get(task.key); if (!previous) return [];
-      const fields = (Object.keys(task) as (keyof TaskDraft)[]).flatMap(field => JSON.stringify(previous[field]) === JSON.stringify(task[field]) ? [] : [{ field, before: previous[field], after: task[field] } satisfies FieldChange]);
+      const fields = (Object.keys(task) as (keyof TaskDraft)[]).flatMap(field => canonicalStringify(previous[field]) === canonicalStringify(task[field]) ? [] : [{ field, before: previous[field], after: task[field] } satisfies FieldChange]);
       return fields.length ? [{ key: task.key, fields }] : [];
     }),
   };
