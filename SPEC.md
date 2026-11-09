@@ -839,7 +839,8 @@ REDIS_URL=
 APP_API_TOKEN=
 APP_MODELS_FILE=config/models.yaml
 APP_POLICIES_FILE=config/policies.yaml
-ARTIFACT_STORE=fs            # fs | s3
+# Artifact storage backend: fs | s3
+ARTIFACT_STORE=fs
 ARTIFACT_DIR=./data/artifacts
 S3_ENDPOINT=
 S3_BUCKET=
@@ -859,11 +860,18 @@ NEXT_PUBLIC_APP_NAME=Agent Platform
 APP_API_PORT=8000
 PORT=3000
 APP_DB_NAME=agentplatform
+# Host port of the compose Postgres. It must not clash with a local Postgres
+# (e.g. Homebrew on 5432); if it does, pick a free port and point DATABASE_URL at it.
+APP_PG_PORT=5432
+# Host port of the compose Redis. Change it if 6379 is taken; point REDIS_URL at it.
+APP_REDIS_PORT=6379
 APP_WORKTREE=
 APP_LIVE=0
 APP_DOCKER=0
 ```
-Ports are configurable so several Superset worktrees can run side by side (API `APP_API_PORT`, frontend `PORT`).
+Ports are configurable so several Superset worktrees can run side by side (API `APP_API_PORT`, frontend `PORT`, compose Postgres `APP_PG_PORT`, default 5432, and compose Redis `APP_REDIS_PORT`, default 6379).
+
+Comments in `.env` files always go on their own line above the variable, never after a value: Make (`-include .env`) keeps the spaces before an inline comment as part of the value, and dotenv parsers (Docker Compose included) disagree on inline comments.
 
 ## 23. Milestones and definition of done
 
