@@ -156,7 +156,8 @@ FailureReason = Literal[
     "fail_task", "budget", "model_error", "sandbox_lost", "sandbox_error", "lease_lost"
 ]
 LeaseRenewer = Callable[[], Awaitable[bool]]
-"""Renews the task lease; returns False (or raises ``LeaseLostError``) if it was lost."""
+"""Renews the task lease; returns False (or raises ``LeaseLostError``) if it was lost.
+Any other exception is not proof that the lease is still held: see ``_heartbeat``."""
 
 NO_TOOL_CORRECTION = (
     "You did not call a tool. Respond only with tool calls: up to 2 coordination calls, "
@@ -413,6 +414,12 @@ class AgentRuntimeConfig:
     max_consecutive_sandbox_errors: int = 3
     error_backoff_s: float = 2.0
     heartbeat_interval_s: float = 10.0
+    heartbeat_publish_timeout_s: float = 2.0
+    """Bound on every bus-only publish (heartbeats and thumbnails)."""
+    lease_renew_timeout_s: float = 5.0
+    lease_ttl_s: float | None = None
+    """TTL the caller renews the task lease with. ``None`` (unknown): the first
+    failed renewal (exception or timeout) ends the task with ``lease_lost``."""
     publish_thumbnails: bool = True
 
     @classmethod
@@ -1081,14 +1088,17 @@ class AgentRuntime:
         saved = _SavedFrame(id=new_id(), small_key=small_key, full_key=full_key, small_jpeg=small)
         if cfg.publish_thumbnails:
             try:
-                await self._bus.publish_ephemeral(
-                    Thumbnail(
-                        session_id=self.session.id,
-                        agent_id=self.agent.id,
-                        step=global_step,
-                        jpeg_b64=base64.b64encode(small).decode("ascii"),
-                        ts=utcnow(),
-                    )
+                await asyncio.wait_for(
+                    self._bus.publish_ephemeral(
+                        Thumbnail(
+                            session_id=self.session.id,
+                            agent_id=self.agent.id,
+                            step=global_step,
+                            jpeg_b64=base64.b64encode(small).decode("ascii"),
+                            ts=utcnow(),
+                        )
+                    ),
+                    timeout=cfg.heartbeat_publish_timeout_s,
                 )
             except Exception:
                 self._log.warning("thumbnail_publish_failed", step=global_step)
@@ -1131,31 +1141,56 @@ class AgentRuntime:
             self._log.warning("roster_failed", exc_info=True)
 
     async def _heartbeat(self, task: Task) -> None:
-        """Bus-only heartbeat + lease renewal every ``heartbeat_interval_s``."""
+        """Bus-only heartbeat + lease renewal every ``heartbeat_interval_s``.
+
+        Both waits are bounded (``heartbeat_publish_timeout_s``,
+        ``lease_renew_timeout_s``) so a hung bus cannot delay renewal. Renewal fails
+        closed: ``False``, ``LeaseLostError``, a timeout or any other exception
+        counts as lease loss, unless ``lease_ttl_s`` is set and the lease confirmed
+        by the last successful renewal will still be valid at the next attempt.
+        """
+        cfg = self.config
+        confirmed_until: float | None = None
         while True:
             run = self._run
             try:
-                await self._bus.publish_ephemeral(
-                    Heartbeat(
-                        session_id=self.session.id,
-                        agent_id=self.agent.id,
-                        task_id=task.id,
-                        step=run.step if run else 0,
-                        ts=utcnow(),
-                    )
+                await asyncio.wait_for(
+                    self._bus.publish_ephemeral(
+                        Heartbeat(
+                            session_id=self.session.id,
+                            agent_id=self.agent.id,
+                            task_id=task.id,
+                            step=run.step if run else 0,
+                            ts=utcnow(),
+                        )
+                    ),
+                    timeout=cfg.heartbeat_publish_timeout_s,
                 )
             except Exception:
                 self._log.warning("heartbeat_publish_failed")
             if self._renew_lease is not None:
+                attempt_started = self._clock()
                 try:
-                    ok = await self._renew_lease()
+                    ok = await asyncio.wait_for(
+                        self._renew_lease(), timeout=cfg.lease_renew_timeout_s
+                    )
                 except LeaseLostError:
                     ok = False
-                except Exception:
-                    self._log.warning("lease_renew_failed", exc_info=True)
-                    ok = True  # transient; the lease TTL bounds how long this can go on
+                except Exception as exc:
+                    # Fail closed: keep going only while the last confirmed renewal
+                    # provably covers the next attempt as well.
+                    next_attempt_done = (
+                        self._clock() + cfg.heartbeat_interval_s + cfg.lease_renew_timeout_s
+                    )
+                    ok = confirmed_until is not None and next_attempt_done < confirmed_until
+                    self._log.warning(
+                        "lease_renew_failed", error=type(exc).__name__, still_valid=ok
+                    )
+                else:
+                    if ok and cfg.lease_ttl_s is not None:
+                        confirmed_until = attempt_started + cfg.lease_ttl_s
                 if not ok:
                     self._log.error("lease_lost")
                     self._lease_lost.set()
                     return
-            await asyncio.sleep(self.config.heartbeat_interval_s)
+            await asyncio.sleep(cfg.heartbeat_interval_s)

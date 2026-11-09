@@ -738,6 +738,79 @@ async def test_heartbeat_renews_lease_while_running(harness: Any) -> None:
     assert len([m for m in h.bus.ephemeral if isinstance(m, Heartbeat)]) == len(beats)
 
 
+async def test_repeated_renewal_exceptions_fail_closed(harness: Any) -> None:
+    """An unexpected renew exception is not proof the lease is held (T06 review #3)."""
+    calls = 0
+
+    async def renew() -> bool:
+        nonlocal calls
+        calls += 1
+        raise ConnectionError("redis down")
+
+    h = harness([click(1)], latency_s=30, renew_lease=renew)
+    out = await h.run(limit_s=5)
+    assert out.reason == "lease_lost"
+    assert calls == 1
+    assert h.sandbox.actions == []
+
+
+async def test_renewal_exceptions_stop_before_confirmed_expiry(harness: Any) -> None:
+    """With a known TTL, failures are tolerated only while the last confirmed
+    renewal still covers the next attempt; the loop stops before it expires."""
+    ttl = 0.3
+    confirmed: list[float] = []
+    lost_at: list[float] = []
+
+    async def renew() -> bool:
+        if not confirmed:
+            confirmed.append(time.monotonic())
+            return True
+        lost_at.append(time.monotonic())
+        raise ConnectionError("redis down")
+
+    h = harness(
+        [click(1)],
+        latency_s=30,
+        renew_lease=renew,
+        config={"lease_ttl_s": ttl, "lease_renew_timeout_s": 0.05},
+    )
+    out = await h.run(limit_s=5)
+    assert out.reason == "lease_lost"
+    assert len(lost_at) >= 2  # transient failures were tolerated for a while
+    assert lost_at[-1] < confirmed[0] + ttl  # but it stopped before the lease expired
+
+
+async def test_hung_renewal_is_bounded(harness: Any) -> None:
+    async def renew() -> bool:
+        await asyncio.Event().wait()
+        return True
+
+    h = harness([click(1)], latency_s=30, renew_lease=renew,
+                config={"lease_renew_timeout_s": 0.05})  # fmt: skip
+    out = await h.run(limit_s=5)
+    assert out.reason == "lease_lost"
+
+
+async def test_stalled_heartbeat_publish_does_not_delay_renewal(harness: Any) -> None:
+    renewals = 0
+
+    async def renew() -> bool:
+        nonlocal renewals
+        renewals += 1
+        return renewals < 3
+
+    h = harness([click(1)], latency_s=30, renew_lease=renew,
+                config={"heartbeat_publish_timeout_s": 0.02})  # fmt: skip
+
+    async def stalled_publish(message: Any) -> None:
+        await asyncio.Event().wait()
+
+    h.bus.publish_ephemeral = stalled_publish
+    out = await h.run(limit_s=5)
+    assert out.reason == "lease_lost"
+    assert renewals == 3
+
+
 # -- digest and modes ----------------------------------------------------------------------
 
 

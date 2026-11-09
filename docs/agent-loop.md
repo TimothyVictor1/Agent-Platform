@@ -36,7 +36,7 @@ TaskOutcome(status="submitted" | "failed" | "stopped",
 | `model_error` | 3 consecutive model failures | retry later |
 | `sandbox_lost` | `SandboxExpiredError` while observing | re-create/reconnect sandbox, requeue |
 | `sandbox_error` | 3 consecutive other sandbox failures | same |
-| `lease_lost` | `renew_lease` returned False or raised `LeaseLostError` | none: someone else owns the task now |
+| `lease_lost` | `renew_lease` returned False, raised, or timed out (fail closed; see below) | none: someone else owns the task now |
 
 `status="stopped"` means the user's stop (`ControlState.mode == "stop"`).
 After `run_task` returns, the agent's status is `idle` (submitted or failed),
@@ -140,8 +140,11 @@ Step rules the loop enforces:
 - **Lease**: the heartbeat task publishes `Heartbeat` and calls `renew_lease()`
   every `heartbeat_interval_s` (10 s), including while paused or waiting for an
   approval. If the lease is lost, everything in flight is interrupted (also while
-  paused) and the task ends with `lease_lost`. Transient renew errors are logged
-  and ignored, since the lease TTL bounds them.
+  paused) and the task ends with `lease_lost`. Renewal fails closed: an exception
+  or a timeout (`lease_renew_timeout_s`, 5 s) counts as lease loss, unless
+  `lease_ttl_s` is configured and the last successful renewal still covers the
+  next attempt. The heartbeat publish is bounded by `heartbeat_publish_timeout_s`
+  (2 s), so a hung bus never delays renewal.
 
 ## Context layout (what the model sees)
 
