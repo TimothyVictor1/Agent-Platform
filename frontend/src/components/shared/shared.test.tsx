@@ -22,7 +22,7 @@ describe("shared shell", () => {
   it("defaults to dark and toggles the theme with an accessible button", async () => {
     document.documentElement.classList.add("dark"); render(<AppNav />);
     expect(screen.getByRole("link", { name: "Sessions" })).toHaveAttribute("aria-current", "page");
-    const toggle = screen.getByRole("button", { name: "Toggle dark theme" }); expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await userEvent.click(toggle); expect(document.documentElement).not.toHaveClass("dark"); await userEvent.click(toggle); expect(document.documentElement).toHaveClass("dark");
+    const toggle = screen.getByRole("button", { name: "Dark theme" }); expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(toggle); expect(document.documentElement).not.toHaveClass("dark"); expect(toggle).toHaveAttribute("aria-pressed", "false"); expect(toggle).toHaveAccessibleName("Dark theme"); await userEvent.click(toggle); expect(document.documentElement).toHaveClass("dark"); expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 });

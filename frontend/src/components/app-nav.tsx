@@ -11,6 +11,6 @@ export function AppNav() {
     <Link href="/" className="mr-auto font-semibold tracking-tight">{env.appName}</Link>
     <Link href="/" aria-current={pathname === "/" || pathname.startsWith("/sessions") ? "page" : undefined}>Sessions</Link>
     <Link href="/settings" aria-current={pathname === "/settings" ? "page" : undefined}>Settings</Link>
-    <Button variant="outline" aria-label="Toggle dark theme" aria-pressed={dark} onClick={() => { document.documentElement.classList.toggle("dark", !dark); setDark(!dark); }}>{dark ? "Light theme" : "Dark theme"}</Button>
+    <Button variant="outline" aria-pressed={dark} onClick={() => { document.documentElement.classList.toggle("dark", !dark); setDark(!dark); }}>Dark theme</Button>
   </nav></header>;
 }
