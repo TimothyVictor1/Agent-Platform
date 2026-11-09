@@ -5,8 +5,13 @@
 #   docker build -t agentplatform/desktop:latest sandbox-image
 #
 # Works on linux/amd64 and linux/arm64 (BuildKit sets TARGETARCH).
-# Pin Firefox/ESR for a byte-reproducible apt layer:
-#   docker build --build-arg FIREFOX_VERSION=153.5.1esr ...
+#
+# Supply-chain pins:
+#   - ubuntu:24.04 pinned by digest (both stages)
+#   - Firefox ESR pinned to a release, verified against Mozilla's
+#     SHA512SUMS for that release (override with
+#     --build-arg FIREFOX_VERSION=<version> to bump deliberately)
+#   - control-server venv installed with pip --require-hashes
 #
 # Security summary (details in sandbox-image/README.md):
 #   - single non-root user `agent` (uid 1000) owns the desktop and all inputs
@@ -16,7 +21,7 @@
 #   - control server requires a bearer token and fails closed without one
 
 ########## stage 1: control-server venv (kept out of the desktop layer) ##########
-FROM ubuntu:24.04 AS control-venv
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852 AS control-venv
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -28,12 +33,13 @@ COPY control /opt/control
 WORKDIR /opt
 RUN python3 -m venv /opt/control-venv \
     && /opt/control-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/control-venv/bin/pip install --no-cache-dir -r /tmp/requirements-control.txt \
+    && /opt/control-venv/bin/pip install --no-cache-dir \
+        --require-hashes -r /tmp/requirements-control.txt \
     && /opt/control-venv/bin/python -c "import control.main as m; m.app" \
     && rm -f /tmp/requirements-control.txt
 
 ########## stage 2: desktop runtime ##########
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
 LABEL org.opencontainers.image.title="AgentPlatform Desktop Sandbox" \
       org.opencontainers.image.description="Ubuntu 24.04 XFCE desktop with Firefox ESR, LibreOffice and a FastAPI control server for computer-use agents" \
@@ -70,23 +76,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Firefox ESR (official Mozilla tarball; avoids the Ubuntu snap) -----------
-ARG FIREFOX_VERSION=latest
+ARG FIREFOX_VERSION=153.6.0esr
 RUN set -eux; \
     v="${FIREFOX_VERSION}"; \
-    if [ "$v" = "latest" ]; then \
-      v="$(curl -fsSL --retry 4 --retry-delay 2 https://product-details.mozilla.org/1.0/firefox_versions.json | jq -r '.FIREFOX_ESR')"; \
-    fi; \
-    [ -n "$v" ] && [ "$v" != "null" ] || { echo "could not resolve FIREFOX_ESR version" >&2; exit 1; }; \
     case "$(uname -m)" in \
       x86_64) arch=linux-x86_64 ;; \
       aarch64) arch=linux-aarch64 ;; \
       *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    url="https://ftp.mozilla.org/pub/firefox/releases/${v}/${arch}/en-US/firefox-${v}.tar.xz"; \
-    curl -fsSL "$url" -o /tmp/firefox.tar.xz; \
+    base="https://ftp.mozilla.org/pub/firefox/releases/${v}"; \
+    curl -fsSL --retry 4 --retry-delay 2 "${base}/SHA512SUMS" -o /tmp/SHA512SUMS; \
+    curl -fsSL --retry 4 --retry-delay 2 "${base}/${arch}/en-US/firefox-${v}.tar.xz" -o /tmp/firefox.tar.xz; \
+    expected="$(grep " ${arch}/en-US/firefox-${v}.tar.xz\$" /tmp/SHA512SUMS | awk '{print $1}')"; \
+    test -n "$expected"; \
+    echo "${expected}  /tmp/firefox.tar.xz" | sha512sum -c -; \
     mkdir -p /opt/firefox/distribution; \
     tar -xJf /tmp/firefox.tar.xz -C /opt/firefox --strip-components=1; \
-    rm -f /tmp/firefox.tar.xz; \
+    rm -f /tmp/firefox.tar.xz /tmp/SHA512SUMS; \
     ln -s /opt/firefox/firefox /usr/local/bin/firefox
 
 COPY firefox-policies.json /opt/firefox/distribution/policies.json
