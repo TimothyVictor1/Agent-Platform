@@ -394,7 +394,7 @@ async def test_tool_errors_do_not_crash_the_loop(harness: Any) -> None:
     sb = FakeSandbox([make_png(seed=i) for i in range(1, 20)], command_handler=handler)
     h = harness(
         [
-            tool_response("click", x=-5, y=10),
+            tool_response("click", x=-6, y=10),
             tool_response("run_command", cmd="boom"),
             tool_response("click", x="left", y=1),
             tool_response("teleport", to="moon"),
@@ -675,6 +675,21 @@ async def test_expired_sandbox_fails_with_sandbox_lost(harness: Any) -> None:
     out = await h.run()
     assert out.reason == "sandbox_lost"
     assert h.model.calls == []
+
+
+async def test_invalid_screenshot_is_a_recoverable_sandbox_error(harness: Any) -> None:
+    """A screenshot that is not a valid image is handled like any other sandbox error:
+    a recoverable agent.error, backoff, then a fresh screenshot (T06 follow-up)."""
+    h = harness([click(1), give_up()], screens=[b"not a png", *distinct_screens(3)])
+    out = await h.run()
+    assert out.reason == "fail_task"
+    errors = h.events("agent.error")
+    assert len(errors) == 1
+    assert errors[0].payload.recoverable
+    assert "not a valid image" in errors[0].payload.error
+    assert h.sandbox.screenshots_taken == 3
+    assert [s.step for s in h.steps()] == [1, 2]
+    assert len(h.model.calls) == 2
 
 
 async def test_lost_lease_stops_the_loop(harness: Any) -> None:

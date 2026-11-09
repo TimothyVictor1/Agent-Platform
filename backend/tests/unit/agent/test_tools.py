@@ -156,7 +156,7 @@ async def test_click_right_double(registry: ToolRegistry, make_ctx: Any) -> None
 
 async def test_click_negative_is_error_not_crash(registry: ToolRegistry, make_ctx: Any) -> None:
     sb = FakeSandbox()
-    res = await run(registry, make_ctx(sandbox=sb), "click", x=-5, y=20)
+    res = await run(registry, make_ctx(sandbox=sb), "click", x=-6, y=20)
     assert res.is_error
     assert res.text.startswith("ERROR:")
     assert sb.actions == []
@@ -164,7 +164,7 @@ async def test_click_negative_is_error_not_crash(registry: ToolRegistry, make_ct
 
 async def test_coordinates_are_clamped_to_screen(registry: ToolRegistry, make_ctx: Any) -> None:
     sb = FakeSandbox()
-    await run(registry, make_ctx(sandbox=sb), "move", x=5000, y=5000)
+    await run(registry, make_ctx(sandbox=sb), "move", x=1500, y=1500)
     assert sb.actions == [RecordedAction("move", {"x": 1279, "y": 799})]
 
 
