@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from agentplatform.contracts.common import Contract
 
@@ -70,7 +70,7 @@ class Message(Contract):
 
     * ``system``: text parts only.
     * ``user``: text and image parts.
-    * ``assistant``: optional text parts and ``tool_calls``.
+    * ``assistant``: optional text parts, ``tool_calls`` and ``thinking_blocks``.
     * ``tool``: the result of one tool call (text parts only), ``tool_call_id`` set.
     """
 
@@ -78,6 +78,17 @@ class Message(Contract):
     content: list[Part] = Field(default_factory=list)
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
+    thinking_blocks: list[dict[str, Any]] | None = None
+    """Provider thinking blocks of an assistant turn (e.g. Anthropic ``thinking`` /
+    ``redacted_thinking`` with their signatures), exactly as the provider returned
+    them. Opaque: clients echo them back unchanged and in order when this message is
+    sent again, and never edit, merge or display them (SPEC §8.1). Assistant only."""
+
+    @model_validator(mode="after")
+    def _thinking_only_on_assistant(self) -> Message:
+        if self.thinking_blocks is not None and self.role != "assistant":
+            raise ValueError("thinking_blocks are only allowed on assistant messages")
+        return self
 
     @classmethod
     def text(cls, role: Literal["system", "user", "assistant"], text: str) -> Message:

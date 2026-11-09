@@ -386,11 +386,14 @@ ModelRequest  { messages: list[Message], tools: list[ToolSpec] | None,
                 max_output_tokens: int, temperature: float,
                 response_format?: "json" , timeout_s: float }
 Message       { role: "system"|"user"|"assistant"|"tool", content: list[Part],
-                tool_calls?: list[ToolCall], tool_call_id?: str }
+                tool_calls?: list[ToolCall], tool_call_id?: str,
+                thinking_blocks?: list[dict] }      # assistant only, opaque (see below)
 Part          = TextPart{text} | ImagePart{jpeg_bytes, width, height, detail}
 ModelResponse { text: str | None, tool_calls: list[ToolCall],
                 usage: {input_tokens, output_tokens, images}, raw: dict, latency_ms }
 ```
+
+`thinking_blocks`: provider thinking blocks of an assistant turn (e.g. Anthropic `thinking` / `redacted_thinking` blocks with their signatures), stored exactly as the provider returned them. Some providers reject a follow-up request (notably one carrying tool results) unless the previous assistant turn's thinking blocks are sent back. Clients must **echo them back unchanged and in the same order** whenever that assistant message is resent. Never edit, merge, reorder, summarize or truncate them; when history trimming drops an assistant turn, its blocks go with it. They are opaque provider data: never shown in the UI, posted to the board, or parsed for actions. Providers that do not use them ignore the field. Only `assistant` messages may carry them.
 
 Providers:
 - `openai_compatible`: base_url + api_key_env + model. Covers llama.cpp server, Ollama, vLLM, LM Studio, OpenRouter, Gemini (OpenAI-compatible endpoint). Images sent as `image_url` data URLs **inside user messages**, never as tool-result text.
