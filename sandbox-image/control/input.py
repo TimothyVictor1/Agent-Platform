@@ -58,7 +58,7 @@ def move(x: int, y: int) -> None:
 def drag(x1: int, y1: int, x2: int, y2: int) -> None:
     check_coords(x1, y1)
     check_coords(x2, y2)
-    run_xdotool("mousedown", "--sync", "1")
+    run_xdotool("mousedown", "1")
     try:
         for step in range(1, DRAG_STEPS + 1):
             frac = step / DRAG_STEPS
@@ -66,7 +66,7 @@ def drag(x1: int, y1: int, x2: int, y2: int) -> None:
             ys = round(y1 + (y2 - y1) * frac)
             run_xdotool("mousemove", "--sync", str(xs), str(ys))
     finally:
-        run_xdotool("mouseup", "--sync", "1")
+        run_xdotool("mouseup", "1")
 
 
 def scroll(

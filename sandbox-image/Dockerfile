@@ -25,6 +25,7 @@ RUN apt-get update \
 
 COPY requirements-control.txt /tmp/requirements-control.txt
 COPY control /opt/control
+WORKDIR /opt
 RUN python3 -m venv /opt/control-venv \
     && /opt/control-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/control-venv/bin/pip install --no-cache-dir -r /tmp/requirements-control.txt \
@@ -62,7 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgtk-3-0t64 libasound2t64 libdbus-glib-1-2 libxt6t64 libgbm1 \
       libegl1 libgl1 libxcomposite1 libxdamage1 libxrandr2 libxkbcommon0 \
       libx11-xcb1 libcups2t64 \
-      ca-certificates curl jq netbase python3 python3-venv supervisor \
+      ca-certificates curl jq netbase xz-utils python3 python3-venv supervisor \
     && apt-get remove -y --purge xfce4-power-manager xfce4-screensaver xscreensaver \
     && apt-get -y autoremove \
     && apt-get clean \
