@@ -12,6 +12,8 @@ export const planFixture: PlanProposal = {
 };
 
 const storageKey = (sessionId: string) => `agentplatform.mock.plan.${sessionId}`;
+export function isReviewSession(id: string): boolean { return id === "demo-session"; }
+
 export function reviewEvents(sessionId: string): Event[] | null {
   if (typeof localStorage === "undefined") return null;
   const raw = localStorage.getItem(storageKey(sessionId));

@@ -1,8 +1,9 @@
-import type { ApprovePlanRequest, CreateSessionRequest, EventPage, PutPlanRequest, RefinePlanRequest, Session, SessionPage } from "@/contracts/generated";
+import type { ApprovePlanRequest, CreateSessionRequest, EventPage, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage } from "@/contracts/generated";
 import { fieldErrors, validatePlan } from "@/components/plan/validation";
+import { applyEvent, initialSessionState } from "@/lib/session-store";
 import { budgets, health, profiles, scriptedEvents, session } from "./fixtures";
 import { thumbnailJpeg } from "./socket";
-import { reviewCommand, reviewDetail, reviewEvents } from "./plan";
+import { isReviewSession, reviewCommand, reviewDetail, reviewEvents } from "./plan";
 
 // Browser storage preserves mock-created sessions across route reloads without a global singleton.
 function sessions(): Session[] {
@@ -29,9 +30,14 @@ export async function mockRequest(rawUrl: string, init: RequestInit): Promise<Re
   if (resource === "sessions") {
     const current = sessions().find(item => item.id === resourceId);
     if (!current) return json({ type: "about:blank", title: "Session not found", status: 404, detail: "Unknown mock session" }, 404);
-    if (!action) return json(reviewDetail(current));
-    const events = reviewEvents(resourceId) ?? scriptedEvents(resourceId);
-    if (action === "plan" && init.method === "PUT") {
+    const review = isReviewSession(resourceId);
+    const events = (review ? reviewEvents(resourceId) : null) ?? scriptedEvents(resourceId);
+    if (!action) {
+      if (review) return json(reviewDetail(current));
+      const state = events.slice(0, 3).reduce(applyEvent, initialSessionState(resourceId));
+      return json({ session: { ...current, status: "awaiting_approval", plan_version: 1 }, plan: state.plan, tasks: [], agents: [], counts: { total: 0, by_status: {} }, last_seq: 3 } satisfies SessionDetail);
+    }
+    if (review && action === "plan" && init.method === "PUT") {
       const request = body as PutPlanRequest;
       const detail = reviewDetail(current);
       if (request.base_version != null && request.base_version !== detail.plan?.version) return json({ type: "about:blank", title: "Plan version changed", status: 409, detail: "Reload the latest plan before saving." }, 409);
@@ -39,8 +45,8 @@ export async function mockRequest(rawUrl: string, init: RequestInit): Promise<Re
       if (errors.length) return json({ type: "about:blank", title: "Invalid plan", status: 422, errors: errors.map(error => ({ message: error.message, task_key: error.task_key, code: error.code, loc: null, details: null })) }, 422);
       reviewCommand(current, "plan", request.tasks);
     }
-    if (action === "refine" && init.method === "POST") reviewCommand(current, "refine", undefined, (body as RefinePlanRequest).instruction);
-    if (action === "approve" && init.method === "POST") {
+    if (review && action === "refine" && init.method === "POST") reviewCommand(current, "refine", undefined, (body as RefinePlanRequest).instruction);
+    if (review && action === "approve" && init.method === "POST") {
       const detail = reviewDetail(current);
       const request = body as ApprovePlanRequest;
       if (request.plan_version != null && request.plan_version !== detail.plan?.version) return json({ type: "about:blank", title: "Plan version changed", status: 409 }, 409);
