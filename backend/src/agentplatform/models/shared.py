@@ -27,7 +27,8 @@ log = structlog.get_logger(__name__)
 @dataclass
 class SharedModelState:
     no_required_tool_choice: set[str] = field(default_factory=set)
-    """Base URLs whose server rejected ``tool_choice="required"``."""
+    """Keys whose provider rejected forced tool use (``tool_choice="required"``): the
+    base URL for OpenAI-compatible servers, ``anthropic:<model>`` for Anthropic."""
     _semaphores: dict[str, tuple[int, asyncio.Semaphore]] = field(default_factory=dict)
 
     def semaphore(self, key: str, limit: int) -> asyncio.Semaphore:
