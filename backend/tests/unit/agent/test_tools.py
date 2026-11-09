@@ -508,3 +508,78 @@ async def test_wait_for_timeout_is_capped(registry: ToolRegistry, make_ctx: Any)
         registry, make_ctx(board=FakeBoard([q], None)), "wait_for", entry_id=q.id, timeout_s=500
     )
     assert res.is_error
+
+
+# -- $ref resolution in task schemas (T06 review #1) ------------------------------------
+
+
+@pytest.fixture
+def no_io(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record (and refuse) any network or file access made during validation."""
+    import builtins
+    import socket
+    import urllib.request
+
+    attempts: list[str] = []
+    real_open = builtins.open
+
+    def refuse(kind: str) -> Callable[..., Any]:
+        def _refuse(*args: Any, **kwargs: Any) -> Any:
+            attempts.append(f"{kind}: {args[:1]!r}")
+            raise AssertionError(f"unexpected {kind} access")
+
+        return _refuse
+
+    def guarded_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        attempts.append(f"open: {file!r}")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse("urlopen"))
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse("opener"))
+    monkeypatch.setattr(socket, "getaddrinfo", refuse("getaddrinfo"))
+    monkeypatch.setattr(socket, "create_connection", refuse("create_connection"))
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    return attempts
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "http://169.254.169.254/latest/meta-data/schema.json",
+        "https://example.com/schema.json",
+        "file:///etc/passwd",
+        "other.json#/$defs/x",
+    ],
+)
+def test_external_schema_refs_are_never_retrieved(ref: str, no_io: list[str]) -> None:
+    schema = {"type": "object", "properties": {"a": {"$ref": ref}}}
+    specs = [OutputSpec(key="data", kind="json", json_schema=schema)]
+    problems = validate_outputs(specs, {"data": {"a": 1}}, [])
+    assert no_io == []
+    assert len(problems) == 1
+    assert "cannot be resolved" in problems[0]
+    assert "only local references" in problems[0]
+    assert len(problems[0]) < 300
+
+
+def test_long_unresolvable_ref_is_clipped(no_io: list[str]) -> None:
+    ref = "https://example.com/" + "x" * 5000
+    specs = [OutputSpec(key="data", kind="json", json_schema={"$ref": ref})]
+    problems = validate_outputs(specs, {"data": 1}, [])
+    assert no_io == []
+    assert len(problems) == 1
+    assert len(problems[0]) < 300
+
+
+def test_local_schema_refs_resolve(no_io: list[str]) -> None:
+    schema = {
+        "$defs": {"price": {"type": "object", "required": ["usd"]}},
+        "type": "array",
+        "items": {"$ref": "#/$defs/price"},
+    }
+    specs = [OutputSpec(key="data", kind="json", json_schema=schema)]
+    assert validate_outputs(specs, {"data": [{"usd": 1}]}, []) == []
+    problems = validate_outputs(specs, {"data": [{}]}, [])
+    assert no_io == []
+    assert len(problems) == 1
+    assert "'usd' is a required property" in problems[0]

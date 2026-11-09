@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import ValidationError
+from referencing import Registry, Resource
+from referencing.exceptions import NoSuchResource, Unresolvable
 
 from agentplatform.contracts.model_io import ToolSpec
 from agentplatform.contracts.task import OutputSpec, TaskResult
@@ -47,13 +49,35 @@ __all__ = [
 
 CONTROL_GROUP = "control"
 MAX_WAIT_FOR_S = 120
+_REF_ERROR_MAX_CHARS = 80
+
+
+def _refuse_retrieval(uri: str) -> Resource[Any]:
+    """``referencing`` retrieve hook that never touches the network or the file
+    system: task schemas come from a model-written plan, so a remote ``$ref``
+    (``http://``, ``file://``, ...) must not make the host fetch anything."""
+    raise NoSuchResource(ref=uri)  # type: ignore[call-arg]  # attrs class
+
+
+_NO_RETRIEVAL_REGISTRY: Registry[Any] = Registry(retrieve=_refuse_retrieval)  # type: ignore[call-arg]
+"""Empty registry: only references inside the schema itself (``#/$defs/...``) and
+the bundled JSON Schema meta-schemas resolve; everything else is unresolvable."""
 
 
 def _schema_errors(schema: dict[str, Any], value: Any, key: str) -> list[str]:
     try:
         Draft202012Validator.check_schema(schema)
-        validator = Draft202012Validator(schema)
+        validator = Draft202012Validator(schema, registry=_NO_RETRIEVAL_REGISTRY)
         problems = sorted(validator.iter_errors(value), key=lambda e: list(e.path))
+    except Unresolvable as exc:
+        ref = str(getattr(exc, "ref", "") or "")
+        if len(ref) > _REF_ERROR_MAX_CHARS:
+            ref = ref[: _REF_ERROR_MAX_CHARS - 1] + "…"
+        return [
+            f"output {key!r}: the task's JSON schema has a $ref {ref!r} that cannot be "
+            "resolved (only local references such as '#/$defs/...' are allowed); "
+            "report this in open_issues"
+        ]
     except (SchemaError, TypeError, ValueError):
         return [f"output {key!r}: the task's JSON schema is invalid; report this in open_issues"]
     out = []
