@@ -11,6 +11,7 @@ Env knobs:
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import secrets
@@ -201,7 +202,18 @@ def sandbox() -> SimpleNamespace:
         deadline = time.monotonic() + HEALTH_TIMEOUT_S
         last: tuple[int, bytes] | None = None
         while time.monotonic() < deadline:
-            status, payload = client.call("GET", "/health", timeout=5.0)
+            try:
+                status, payload = client.call("GET", "/health", timeout=5.0)
+            except (
+                urllib.error.URLError,
+                http.client.HTTPException,
+                OSError,
+            ):
+                # Docker's port proxy accepts TCP before uvicorn binds, so
+                # early polls surface as closed connections, not HTTP errors.
+                last = None
+                time.sleep(1.0)
+                continue
             if status == 200:
                 break
             last = (status, payload)
