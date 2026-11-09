@@ -306,7 +306,6 @@ class WsTicket(Contract):
     ttl_s: int = Field(default=WS_TICKET_TTL_S, ge=1)
 
 
-
 class WsEventMessage(Contract):
     type: Literal["event"] = "event"
     event: Event

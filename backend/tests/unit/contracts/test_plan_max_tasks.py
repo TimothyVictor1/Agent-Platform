@@ -7,6 +7,7 @@ from typing import get_args
 import pytest
 
 from agentplatform.contracts.plan import MAX_TASKS, PlanError, PlanErrorCode, validate_plan
+from agentplatform.contracts.task import TaskDraft
 from agentplatform.runtime.planner import PlannerErrorCode
 from agentplatform.testing import make_tasks
 
@@ -20,21 +21,22 @@ NEW_CODES = (
 )
 
 
-def chain(n: int) -> list[str]:
-    return [f"T{i}" for i in range(1, n + 1)]
+def independent(n: int) -> list[TaskDraft]:
+    """``n`` tasks T1..Tn without dependencies."""
+    return make_tasks({f"T{i}": [] for i in range(1, n + 1)})
 
 
 def test_default_limit_is_still_twelve() -> None:
     assert MAX_TASKS == 12
-    assert validate_plan(make_tasks(dict.fromkeys(chain(12), []))) == []
-    errors = validate_plan(make_tasks(dict.fromkeys(chain(13), [])))
+    assert validate_plan(independent(12)) == []
+    errors = validate_plan(independent(13))
     assert [e.code for e in errors] == ["too_many_tasks"]
     assert "maximum is 12" in errors[0].message
 
 
 def test_extend_limit_allows_twelve_new_tasks() -> None:
     existing = 10
-    tasks = make_tasks(dict.fromkeys(chain(existing + MAX_TASKS), []))
+    tasks = independent(existing + MAX_TASKS)
     assert validate_plan(tasks, max_tasks=existing + MAX_TASKS) == []
     errors = validate_plan([*tasks, *make_tasks({"T99": []})], max_tasks=existing + MAX_TASKS)
     assert [e.code for e in errors] == ["too_many_tasks"]
@@ -42,9 +44,8 @@ def test_extend_limit_allows_twelve_new_tasks() -> None:
 
 
 def test_lower_limit_is_respected() -> None:
-    assert [e.code for e in validate_plan(make_tasks(dict.fromkeys(chain(3), [])), max_tasks=2)] == [
-        "too_many_tasks"
-    ]
+    errors = validate_plan(independent(3), max_tasks=2)
+    assert [e.code for e in errors] == ["too_many_tasks"]
 
 
 @pytest.mark.parametrize("bad", [0, -1])
