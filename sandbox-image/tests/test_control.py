@@ -41,7 +41,19 @@ def png_dimensions(png: bytes) -> tuple[int, int]:
 
 
 def close_mousepad(client) -> None:
-    client.command("pkill -f mousepad >/dev/null 2>&1 || true")
+    # -x: exact process name, so the bash -lc wrapper running this pkill
+    # does not match its own cmdline ("pkill -f mousepad" kills itself).
+    client.command("pkill -x mousepad >/dev/null 2>&1 || true")
+    # Mousepad is single-instance over D-Bus: if a new mousepad starts while
+    # the previous one is still shutting down, it forwards the file to the
+    # dying instance and exits -> no window ever appears. Wait for exit.
+    for _ in range(30):
+        out = str(
+            client.command("pgrep -x mousepad >/dev/null && echo running || true")["stdout"]
+        ).strip()
+        if out != "running":
+            return
+        time.sleep(0.3)
 
 
 def launch_mousepad(client, path: str) -> None:
