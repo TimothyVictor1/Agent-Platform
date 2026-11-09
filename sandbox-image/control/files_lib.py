@@ -7,10 +7,14 @@ inside the sandbox home cannot become a read lens into the rest of the
 container. Uploads are capped at 50 MB and written atomically (temp file in
 the same directory + rename).
 """
+
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import tempfile
+from collections.abc import AsyncIterator
 
 from .config import FILE_ROOT, MAX_FILE_BYTES, MAX_FILE_READ_BYTES
 
@@ -47,9 +51,7 @@ def check_contained(path: str, *, must_exist: bool) -> str:
     if must_exist:
         real = os.path.realpath(norm)
         if not _under_root(real, root):
-            raise ValueError(
-                f"path resolves outside {FILE_ROOT} (symlink?): {path!r}"
-            )
+            raise ValueError(f"path resolves outside {FILE_ROOT} (symlink?): {path!r}")
         return real
 
     probe = os.path.dirname(norm) or "/"
@@ -57,37 +59,40 @@ def check_contained(path: str, *, must_exist: bool) -> str:
         probe = os.path.dirname(probe)
     real_probe = os.path.realpath(probe)
     if not _under_root(real_probe, root):
-        raise ValueError(
-            f"path resolves outside {FILE_ROOT} (symlink?): {path!r}"
-        )
+        raise ValueError(f"path resolves outside {FILE_ROOT} (symlink?): {path!r}")
     return norm
 
 
-async def write_stream(path: str, chunks) -> int:
-    """Consume an async byte stream, cap total size, write atomically."""
-    norm = check_contained(path, must_exist=False)
+def _atomic_write(norm: str, buf: bytearray) -> int:
+    """Write *buf* to *norm* atomically (temp file in the same dir + rename)."""
     directory = os.path.dirname(norm) or "/"
-    if not os.path.isdir(directory):
-        os.makedirs(directory, exist_ok=True)
+    os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".upload-", dir=directory)
-    total = 0
     try:
         with os.fdopen(fd, "wb") as out:
-            async for chunk in chunks:
-                total += len(chunk)
-                if total > MAX_FILE_BYTES:
-                    raise OverflowError(
-                        f"file exceeds the {MAX_FILE_BYTES} byte limit"
-                    )
-                out.write(chunk)
+            out.write(buf)
         os.replace(tmp, norm)  # atomic within the same directory
-        return total
+        return len(buf)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
+
+
+async def write_stream(path: str, chunks: AsyncIterator[bytes]) -> int:
+    """Consume an async byte stream, cap total size, write atomically.
+
+    The body is buffered in memory (bounded by MAX_FILE_BYTES, checked as
+    the chunks arrive, so an oversized upload is rejected mid-stream) and
+    handed to a worker thread for the blocking file work.
+    """
+    norm = check_contained(path, must_exist=False)
+    buf = bytearray()
+    async for chunk in chunks:
+        buf.extend(chunk)
+        if len(buf) > MAX_FILE_BYTES:
+            raise OverflowError(f"file exceeds the {MAX_FILE_BYTES} byte limit")
+    return await asyncio.to_thread(_atomic_write, norm, buf)
 
 
 def read_bytes(path: str) -> bytes:
@@ -106,7 +111,9 @@ def read_bytes(path: str) -> bytes:
 
 
 def list_dir(path: str) -> list[dict[str, object]]:
-    real = check_contained(path, must_exist=True)
+    # Listing may name a directory with a trailing slash ("/home/agent/");
+    # read and write keep the strict no-trailing-slash rule.
+    real = check_contained(path.rstrip("/") or "/", must_exist=True)
     if not os.path.isdir(real):
         raise NotADirectoryError(real)
     entries: list[dict[str, object]] = []

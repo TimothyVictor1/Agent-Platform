@@ -1,6 +1,8 @@
 """Screen inspection: PNG screenshots via scrot and Xvfb geometry."""
+
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import tempfile
@@ -13,8 +15,8 @@ def grab_png() -> bytes:
     fd, path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     try:
-        proc = subprocess.run(
-            ["scrot", "-o", path],
+        proc = subprocess.run(  # noqa: S603 - fixed tool, no user input in args
+            ["/usr/bin/scrot", "-o", path],
             capture_output=True,
             text=True,
             timeout=60,
@@ -26,10 +28,8 @@ def grab_png() -> bytes:
         with open(path, "rb") as fh:
             return fh.read()
     finally:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(path)
-        except FileNotFoundError:
-            pass
 
 
 def asdict() -> dict[str, int]:
