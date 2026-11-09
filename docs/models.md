@@ -72,8 +72,17 @@ provider outage does not fail tasks. It does put more load on a struggling serve
 - `response_format: "json"` is only a hint: one line is appended to the system prompt.
 - Current models think by default. Thinking tokens count against `max_output_tokens`
   (the role's `max_output_tokens`, default 1024), so give Anthropic roles a larger value,
-  e.g. 4096–16000. Thinking blocks in the reply are dropped, because the provider-agnostic
-  `Message` has no field to carry them into the next request.
+  e.g. 4096–16000.
+- **Known limitation: thinking blocks are dropped.** `AnthropicClient` keeps only the
+  `text` and `tool_use` blocks of a reply. `thinking` and `redacted_thinking` blocks are
+  discarded, because the provider-agnostic `Message` contract has no field to carry them
+  into the next request. The Messages API expects the thinking blocks of an assistant
+  turn that called tools to be sent back unchanged with the matching `tool_result`s. So
+  **multi-step tool use with a thinking model may fail** (a 400 on the second step, or
+  the model losing its reasoning between steps). This stays open until a contract change
+  adds an opaque, provider-specific field to assistant messages, for example
+  `Message.provider_blocks`, that the client round-trips. That change needs a Contract
+  change request; it is not part of T02.
 
 ## Pointing a profile at a server
 
