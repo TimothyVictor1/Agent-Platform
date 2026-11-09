@@ -21,6 +21,9 @@ chmod 700 "$XDG_RUNTIME_DIR"
 install -o agent -g agent -m 0600 /dev/null "$XAUTHORITY"
 COOKIE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 xauth -f "$XAUTHORITY" add ":1" . "$COOKIE" >/dev/null 2>&1
+# xauth rewrites the file via a temp file + rename, which loses the
+# agent ownership; restore it or every agent-user X client is rejected.
+chown agent:agent "$XAUTHORITY"
 chmod 600 "$XAUTHORITY"
 
 exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
