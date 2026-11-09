@@ -1973,7 +1973,13 @@ export interface PlanError {
     | "json_schema_on_non_json"
     | "unknown_input_task"
     | "input_not_dependency"
-    | "unknown_input_output";
+    | "unknown_input_output"
+    | "invalid_json"
+    | "invalid_plan"
+    | "invalid_task"
+    | "key_collision"
+    | "depends_on_unusable_task"
+    | "no_new_tasks";
   message: string;
   task_key: string | null;
   field: string | null;

@@ -620,13 +620,13 @@ Output: `PlanProposal { tasks: list[TaskDraft], rationale: str, assumptions: lis
 ### 11.3 Robustness
 
 - Request JSON output (`response_format=json` where supported). Parse with a tolerant extractor (strip code fences, find the first balanced JSON object, respecting strings and escapes).
-- Validate with Pydantic + DAG validation (unknown dependency keys, cycles, duplicate keys, empty criteria, output keys referenced by inputs exist).
+- Validate with Pydantic + DAG validation (unknown dependency keys, cycles, duplicate keys, empty criteria, output keys referenced by inputs exist). Error codes are `PlanErrorCode` (`contracts/plan.py`): the DAG codes from `validate_plan` plus the planner's own `invalid_json`, `invalid_plan`, `invalid_task`, `key_collision`, `depends_on_unusable_task` and `no_new_tasks`.
 - On validation failure: one **repair call** that includes the exact validation errors. If it fails again, return a clear error to the UI (no silent fallback).
 
 ### 11.4 Refinement and follow-up
 
 - `refine(plan, instruction)`: returns a new full proposal; the UI shows a diff (added/removed/changed tasks).
-- `extend(plan, follow_up_prompt)`: adds tasks that may depend on existing done tasks; new `plan_version`.
+- `extend(plan, follow_up_prompt)`: adds tasks that may depend on existing done tasks; new `plan_version`. Each follow-up may add up to **12 new tasks** (the merged plan is checked with `validate_plan(tasks, max_tasks=len(existing) + 12)`; the default `max_tasks=12` applies to every other plan).
 
 ## 12. Scheduler
 

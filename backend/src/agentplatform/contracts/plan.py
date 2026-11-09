@@ -45,6 +45,13 @@ PlanErrorCode = Literal[
     "unknown_input_task",
     "input_not_dependency",
     "unknown_input_output",
+    # produced by the planner (runtime/planner.py) rather than by validate_plan:
+    "invalid_json",  # no JSON object could be extracted from the model reply
+    "invalid_plan",  # a top-level proposal field failed Pydantic validation
+    "invalid_task",  # a task failed Pydantic validation
+    "key_collision",  # extend: a new task reuses an existing task's key
+    "depends_on_unusable_task",  # extend: a new task depends on a failed/cancelled task
+    "no_new_tasks",  # extend: the reply added no tasks
 ]
 
 
@@ -101,24 +108,30 @@ class PlanDiff(Contract):
     changed: list[TaskChange] = Field(default_factory=list)
 
 
-def validate_plan(tasks: Sequence[TaskDraft]) -> list[PlanError]:
+def validate_plan(tasks: Sequence[TaskDraft], *, max_tasks: int = MAX_TASKS) -> list[PlanError]:
     """Check the cross-task rules of a plan. Returns an empty list when valid.
 
-    Rules: at least one and at most ``MAX_TASKS`` tasks; unique keys; every
+    ``max_tasks`` caps the number of tasks (default ``MAX_TASKS``). ``extend`` passes
+    ``len(existing) + MAX_TASKS`` so each follow-up may add up to ``MAX_TASKS`` new
+    tasks (SPEC §11.4). Raises ``ValueError`` if ``max_tasks < 1``.
+
+    Rules: at least one and at most ``max_tasks`` tasks; unique keys; every
     ``depends_on`` key exists and is not the task itself; no cycles (each cycle is
     reported once with its path); 1..``MAX_CRITERIA`` non-blank acceptance criteria;
     unique output keys per task; ``json_schema`` only on json outputs and must be a
     valid JSON Schema; every input references a task in ``depends_on`` and an output
     key that task declares.
     """
+    if max_tasks < 1:
+        raise ValueError(f"max_tasks must be at least 1, got {max_tasks}")
     errors: list[PlanError] = []
     if not tasks:
         return [PlanError(code="empty_plan", message="The plan has no tasks.")]
-    if len(tasks) > MAX_TASKS:
+    if len(tasks) > max_tasks:
         errors.append(
             PlanError(
                 code="too_many_tasks",
-                message=f"The plan has {len(tasks)} tasks; the maximum is {MAX_TASKS}.",
+                message=f"The plan has {len(tasks)} tasks; the maximum is {max_tasks}.",
             )
         )
 
