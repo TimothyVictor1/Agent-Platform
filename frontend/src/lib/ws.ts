@@ -38,8 +38,14 @@ export class SessionSocket {
     if (message.type === "event") {
       if (message.event.session_id !== this.sessionId || message.event.seq <= this.seq) return;
       this.seq = message.event.seq;
-      this.events.forEach(listener => listener(message.event));
-    } else { this.thumbnails.forEach(listener => listener(message)); }
+      this.events.forEach(listener => {
+        try { listener(message.event); } catch (e) { console.error("SessionSocket listener failed", e); }
+      });
+    } else {
+      this.thumbnails.forEach(listener => {
+        try { listener(message); } catch (e) { console.error("SessionSocket listener failed", e); }
+      });
+    }
   }
   private open(generation: number) {
     if (this.stopped || generation !== this.generation) return;
@@ -58,16 +64,25 @@ export class SessionSocket {
       // Browser WebSocket cannot set Authorization. Do not put bearer secrets in URLs.
       const socket = new WebSocket(url.toString());
       this.socket = socket;
-      socket.onopen = () => { this.attempts = 0; this.setState("connected"); };
+      socket.onopen = () => { this.setState("connected"); };
       socket.onmessage = ({ data }: MessageEvent<unknown>) => {
+        this.attempts = 0;
         if (typeof data !== "string") return;
-        try {
-          const message: unknown = JSON.parse(data);
-          if (isServerMessage(message)) this.receive(message);
-        } catch { /* Ignore invalid transport messages without changing the cursor. */ }
+        let message: unknown;
+        try { message = JSON.parse(data); }
+        catch { return; } // Invalid JSON never changes the sequence cursor.
+        if (isServerMessage(message)) this.receive(message);
       };
       socket.onerror = () => socket.close();
-      socket.onclose = () => { this.socket = null; this.reconnect(generation); };
+      socket.onclose = ({ code }) => {
+        this.socket = null;
+        if (code === 1008 || (code >= 4000 && code <= 4999)) {
+          this.stopped = true;
+          this.setState("disconnected");
+          return;
+        }
+        this.reconnect(generation);
+      };
     } catch { this.reconnect(generation); }
   }
   private reconnect(generation: number) {
