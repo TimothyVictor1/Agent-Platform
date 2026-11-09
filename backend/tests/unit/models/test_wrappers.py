@@ -20,12 +20,14 @@ from agentplatform.contracts.model_io import (
     ModelResponse,
     ModelUsage,
     TextPart,
+    ToolCall,
 )
 from agentplatform.errors import ModelError, ModelTimeoutError
 from agentplatform.models.errors import RetryableModelError, parse_retry_after
 from agentplatform.models.openai_compatible import OpenAICompatibleClient
 from agentplatform.models.shared import SharedModelState
 from agentplatform.models.wrappers import (
+    MAX_LOG_DEPTH,
     AccountingClient,
     ConcurrencyLimitedClient,
     DebugLoggingClient,
@@ -336,3 +338,68 @@ async def test_debug_log_failure_does_not_break_the_call(tmp_path: Path) -> None
     blocker.write_text("file in the way")
     client = DebugLoggingClient(Scripted(ModelResponse(text="fine")), blocker)
     assert (await client.complete(req())).text == "fine"
+
+
+# --- review fixes (T02 review) ----------------------------------------------------------
+
+
+def _deep(levels: int) -> dict[str, Any]:
+    value: dict[str, Any] = {"leaf": True}
+    for _ in range(levels):
+        value = {"a": value}
+    return value
+
+
+def _depth(value: Any) -> int:
+    n = 0
+    while isinstance(value, dict) and "a" in value:
+        value, n = value["a"], n + 1
+    return n
+
+
+def test_redact_images_caps_depth() -> None:
+    out = redact_images(_deep(5000))  # was RecursionError
+    assert _depth(out) == MAX_LOG_DEPTH  # the value at depth 64 is the marker
+    inner = out
+    for _ in range(MAX_LOG_DEPTH):
+        inner = inner["a"]
+    assert inner == "<max-depth>"
+    assert redact_images([[["x"]]]) == [[["x"]]]  # shallow values are unchanged
+
+
+async def test_debug_log_survives_a_deeply_nested_raw_response(tmp_path: Path) -> None:
+    resp = ModelResponse(text="deep", raw=_deep(5000))
+    client = DebugLoggingClient(Scripted(resp), tmp_path)
+    assert (await client.complete(req())).text == "deep"  # was ValueError from model_dump
+    (record,) = _records(tmp_path)
+    assert record["response"]["text"] == "deep"
+    assert "<max-depth>" in json.dumps(record)
+
+
+async def test_debug_log_survives_deeply_nested_request_arguments(tmp_path: Path) -> None:
+    call = ToolCall(id="c1", name="click", arguments=_deep(5000))
+    deep_req = ModelRequest(
+        messages=[
+            Message.text("user", "hi"),
+            Message(role="assistant", content=[], tool_calls=[call]),
+            Message.tool_result("c1", "ok"),
+        ]
+    )
+    client = DebugLoggingClient(Scripted(ModelResponse(text="fine")), tmp_path)
+    assert (await client.complete(deep_req)).text == "fine"  # was RecursionError
+    (record,) = _records(tmp_path)
+    assert record["response"]["text"] == "fine"
+    assert "<max-depth>" in json.dumps(record["request"])
+
+
+async def test_debug_log_marks_an_unloggable_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(self: ModelResponse, **kw: Any) -> dict[str, Any]:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(ModelResponse, "model_dump", boom)
+    client = DebugLoggingClient(Scripted(ModelResponse(text="fine")), tmp_path)
+    assert (await client.complete(req())).text == "fine"
+    (record,) = _records(tmp_path)
+    assert record["response"] == {"unloggable": "RecursionError"}
