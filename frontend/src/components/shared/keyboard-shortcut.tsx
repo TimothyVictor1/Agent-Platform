@@ -1,0 +1,1 @@
+export function KeyboardShortcut({ keys }: { keys: string[] }) { return <span aria-label={`Keyboard shortcut: ${keys.join(" + ")}`} className="inline-flex gap-1">{keys.map(key => <kbd key={key} className="rounded border bg-muted px-1.5 py-0.5 text-xs">{key}</kbd>)}</span>; }

@@ -128,3 +128,17 @@
     @apply font-sans;
   }
 }
+@layer base {
+  a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+  input, textarea, select {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--background);
+    padding: 0.6rem 0.75rem;
+    width: 100%;
+  }
+  label { font-size: 0.875rem; }
+}

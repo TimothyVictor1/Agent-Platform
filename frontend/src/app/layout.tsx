@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { env } from "@/lib/env";
 import "./globals.css";
+import { Providers } from "@/components/providers";
+import { AppNav } from "@/components/app-nav";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -24,7 +26,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       lang="en"
       className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="flex min-h-full flex-col bg-background text-foreground">{children}</body>
+      <body className="flex min-h-full flex-col bg-background text-foreground"><Providers><AppNav />{children}</Providers></body>
     </html>
   );
 }
