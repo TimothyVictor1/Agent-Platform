@@ -103,6 +103,7 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 RUN userdel --remove ubuntu 2>/dev/null || true \
     && useradd --create-home --uid 1000 --user-group --shell /bin/bash agent \
+    && cp -r /etc/skel/. /home/agent/ \
     && mkdir -p /home/agent/Shared \
     && chmod +x /home/agent/Desktop/*.desktop /usr/local/bin/entrypoint.sh \
                 /usr/local/bin/start-desktop.sh /usr/local/bin/start-x11vnc.sh \
