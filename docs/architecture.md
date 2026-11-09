@@ -94,6 +94,7 @@ Decisions taken in T00 (implementation details the spec leaves open):
 | D10 | Contract additions beyond SPEC §6: `Task.rework_count`, `Artifact.description`, `Approval.expires_at`, `TaskResult` outputs typed as JSON values, `SessionDetail.last_seq`. | Required by review (§14.4), `publish_artifact(description)`, approval expiry (§15.2) and WS resume. |
 | D11 | One shared `docker compose` project (`name: agentplatform`) for all worktrees; each worktree gets its own database via `APP_DB_NAME`. | Several Superset worktrees can run side by side without port clashes. |
 | D12 | JSON Schema export uses serialization mode with defaults required; `*Request` models only require fields without defaults. | Response types have no needless `?`; requests can omit optional fields. |
+| D13 | Contracts patch T00.x: WebSocket auth by single-use 60 s ticket (`POST /sessions/{id}/ws-ticket` → `WsTicket`, connect with `?ticket=`, close code 4401 = fetch a new ticket); `Message.thinking_blocks` (assistant only, echoed back unchanged); `validate_plan(max_tasks=12)`; planner codes in `PlanErrorCode`; `causation_id` = originating `command_id` on `session.plan_proposed`/`plan_updated`; `APP_REDIS_PORT`. | The API token never goes in a URL; providers need thinking blocks echoed; `extend` may add 12 new tasks; one error-code list for UI and API; the UI can match a stored plan to its request; worktrees can avoid port clashes. |
 
 ## ADRs
 

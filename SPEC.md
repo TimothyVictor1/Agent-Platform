@@ -593,6 +593,8 @@ Signals (configurable):
 - No progress: no board post, no new page title/URL change (when detectable via window title) and no `submit_result` for 40 steps.
 - Error streak: 5 consecutive tool errors.
 
+v1 scope: the window-title part of the "no progress" signal is **out of scope for v1**. `SandboxHandle` has no window-title method and none will be added in v1, so "no progress" means no board post and no `submit_result` for 40 steps.
+
 On detection: emit `agent.stuck_detected` with reason and last 3 frames; set agent status `stuck` (loop keeps running unless Supervisor pauses it); the Supervisor is triggered.
 
 ### 10.7 Control checkpoint
