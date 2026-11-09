@@ -394,7 +394,7 @@ async def test_tool_errors_do_not_crash_the_loop(harness: Any) -> None:
     sb = FakeSandbox([make_png(seed=i) for i in range(1, 20)], command_handler=handler)
     h = harness(
         [
-            tool_response("click", x=-5, y=10),
+            tool_response("click", x=-6, y=10),
             tool_response("run_command", cmd="boom"),
             tool_response("click", x="left", y=1),
             tool_response("teleport", to="moon"),
