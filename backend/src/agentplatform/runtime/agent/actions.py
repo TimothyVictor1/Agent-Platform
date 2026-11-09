@@ -109,11 +109,27 @@ FallbackParser = Callable[[str, Collection[str]], list[ToolCall]]
 
 
 def _decode_rgb(png_bytes: bytes) -> Image.Image:
-    """Decode a screenshot to RGB. A corrupt screenshot is a sandbox fault."""
+    """Decode a screenshot to RGB. A corrupt screenshot is a sandbox fault.
+
+    Pillow only *warns* (``DecompressionBombWarning``) for images above
+    ``Image.MAX_IMAGE_PIXELS`` and errors at twice that; both are a ``SandboxError``
+    here. The size is checked explicitly instead of escalating the warning with
+    ``warnings.catch_warnings``, which is not thread-safe (this runs in worker threads).
+    """
     try:
         with Image.open(io.BytesIO(png_bytes)) as img:
+            limit = Image.MAX_IMAGE_PIXELS
+            if limit is not None and img.width * img.height > limit:
+                raise SandboxError(
+                    f"screenshot is too large ({img.width}x{img.height} pixels, limit {limit})"
+                )
             return img.convert("RGB")
-    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+    except (
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,  # when a warnings filter turns it into an error
+    ) as exc:
         raise SandboxError("screenshot is not a valid image") from exc
 
 
