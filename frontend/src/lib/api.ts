@@ -23,7 +23,12 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     try { const value: unknown = await response.json(); if (value && typeof value === "object") data = value as Partial<Problem>; } catch { /* Non-JSON proxy errors also become ApiError. */ }
     throw new ApiError({ type: typeof data.type === "string" ? data.type : "about:blank", title: typeof data.title === "string" ? data.title : response.statusText || "Request failed", status: response.status, detail: typeof data.detail === "string" ? data.detail : null, instance: typeof data.instance === "string" ? data.instance : null, errors: Array.isArray(data.errors) ? data.errors : null });
   }
-  return (binary ? await response.blob() : await response.json()) as T;
+  if (response.status === 204) return undefined as T;
+  if (binary) return await response.blob() as T;
+  try { return await response.json() as T; }
+  catch {
+    throw new ApiError({ type: "about:blank", title: "Invalid response body", status: response.status, detail: null, instance: null, errors: null });
+  }
 }
 const id = encodeURIComponent;
 export const api = {

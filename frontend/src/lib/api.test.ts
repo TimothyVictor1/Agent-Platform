@@ -5,6 +5,15 @@ import { env } from "./env";
 vi.mock("./env", () => ({ env: { apiUrl: "http://api.example", apiToken: "test-token", mock: false } }));
 afterEach(() => vi.unstubAllGlobals());
 describe("REST client", () => {
+  it("returns undefined for a 204 response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(api.pause("s")).resolves.toBeUndefined();
+  });
+  it("maps a non-JSON success response to ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not JSON", { status: 200 })));
+    await expect(api.profiles()).rejects.toMatchObject({ name: "ApiError", message: "Invalid response body", problem: { title: "Invalid response body", status: 200 } });
+  });
+
   it("sends typed JSON and bearer auth", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "s1" }), { status: 201 }));
     vi.stubGlobal("fetch", fetcher);
@@ -57,10 +66,28 @@ describe("REST client", () => {
     vi.stubGlobal("fetch", fetcher);
     await Promise.all([api.sessions(), api.session("s"), api.refine("s", { instruction: "More" }), api.approve("s"), api.followup("s", { prompt: "Next" }), api.steer("s", { text: "Focus" }), api.stop("s"), api.pause("s"), api.resume("s"), api.takeover("a"), api.release("a"), api.postBoard("s", { kind: "note", title: "Note", body: "Text" }), api.approvals("s", "pending"), api.decideApproval("p", { decision: "approve" }), api.artifacts("s"), api.events("s", { after_seq: 5, limit: 10 }), api.frames("s", { agent_id: "a", from_step: 0, to_step: 10 }), api.frame("f"), api.profiles(), api.providerHealth()]);
     const calls = fetcher.mock.calls.map(([url, init]) => `${(init as RequestInit).method} ${new URL(url as string).pathname}`);
-    expect(calls).toContain("GET /api/v1/config/providers/health");
-    expect(calls).toContain("POST /api/v1/approvals/p/decide");
-    expect(calls).toContain("POST /api/v1/sessions/s/pause");
-    expect(calls).toHaveLength(20);
+    expect(calls.sort()).toEqual([
+      "GET /api/v1/sessions",
+      "GET /api/v1/sessions/s",
+      "POST /api/v1/sessions/s/refine",
+      "POST /api/v1/sessions/s/approve",
+      "POST /api/v1/sessions/s/followup",
+      "POST /api/v1/sessions/s/steer",
+      "POST /api/v1/sessions/s/stop",
+      "POST /api/v1/sessions/s/pause",
+      "POST /api/v1/sessions/s/resume",
+      "POST /api/v1/agents/a/takeover",
+      "POST /api/v1/agents/a/release",
+      "POST /api/v1/sessions/s/board",
+      "GET /api/v1/sessions/s/approvals",
+      "POST /api/v1/approvals/p/decide",
+      "GET /api/v1/sessions/s/artifacts",
+      "GET /api/v1/sessions/s/events",
+      "GET /api/v1/sessions/s/frames",
+      "GET /api/v1/frames/f",
+      "GET /api/v1/config/profiles",
+      "GET /api/v1/config/providers/health",
+    ].sort());
   });
   it("does not send an Authorization header when no token is configured", async () => {
     const original = env.apiToken;
