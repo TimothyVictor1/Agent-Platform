@@ -20,12 +20,12 @@ export interface SessionState {
 export function initialSessionState(sessionId: string | null = null): SessionState {
   return { sessionId, session: null, status: null, plan: null, tasks: {}, agents: {}, board: [], approvals: {}, artifacts: {}, supervisorFeed: [], activity: [], usage: emptyUsage(), lastSeq: 0 };
 }
-function unreachable(event: never): never { throw new Error(`Unhandled event: ${JSON.stringify(event)}`); }
 
 /** Immutable, ordered projection of the generated event union. Unknown additions fail typecheck. */
 export function applyEvent(state: SessionState, event: Event): SessionState {
   if ((state.sessionId !== null && event.session_id !== state.sessionId) || event.seq <= state.lastSeq) return state;
-  let next: SessionState = { ...state, sessionId: event.session_id, lastSeq: event.seq, activity: [...state.activity, event] };
+  const { seq } = event;
+  let next: SessionState = { ...state, sessionId: event.session_id, lastSeq: event.seq, activity: [...state.activity.slice(-499), event] };
   const task = (id: string, patch: Partial<Task>) => {
     if (next.tasks[id]) next = { ...next, tasks: { ...next.tasks, [id]: { ...next.tasks[id], ...patch } } };
   };
@@ -39,7 +39,8 @@ export function applyEvent(state: SessionState, event: Event): SessionState {
     case "session.plan_proposed":
     case "session.plan_updated":
       next.plan = { session_id: event.session_id, version: event.payload.plan_version, proposal: event.payload.proposal, created_at: event.ts, approved_at: null };
-      status("awaiting_approval");
+      // Supervisor plan edits must preserve a running or paused session’s lifecycle status.
+      if (next.status !== "running" && next.status !== "paused") status("awaiting_approval");
       if (next.session) next.session = { ...next.session, plan_version: event.payload.plan_version };
       break;
     case "session.approved":
@@ -92,7 +93,11 @@ export function applyEvent(state: SessionState, event: Event): SessionState {
     case "approval.decided": next.approvals = { ...next.approvals, [event.payload.approval.id]: event.payload.approval }; break;
     case "supervisor.triggered":
     case "supervisor.action": next.supervisorFeed = [...next.supervisorFeed, event]; break;
-    default: return unreachable(event);
+    default: {
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return { ...state, lastSeq: seq };
+    }
   }
   if (next.session && next.status) {
     next.session = { ...next.session, status: next.status, usage: next.usage, ended_at: ["completed", "failed", "stopped"].includes(next.status) ? (next.session.ended_at ?? event.ts) : next.session.ended_at };
@@ -115,7 +120,7 @@ export function createSessionStore(sessionId: string) {
     receive: event => set(state => applyEvent(state, event)),
     hydrate: detail => set(state => {
       if (detail.session.id !== sessionId || detail.last_seq < state.lastSeq) return state;
-      return { ...initialSessionState(sessionId), session: detail.session, status: detail.session.status, usage: detail.session.usage, plan: detail.plan, tasks: Object.fromEntries(detail.tasks.map(task => [task.id, task])), agents: Object.fromEntries(detail.agents.map(agent => [agent.id, agent])), lastSeq: detail.last_seq };
+      return { ...state, session: detail.session, status: detail.session.status, usage: detail.session.usage, plan: detail.plan, tasks: Object.fromEntries(detail.tasks.map(task => [task.id, task])), agents: Object.fromEntries(detail.agents.map(agent => [agent.id, agent])), lastSeq: detail.last_seq };
     }),
   }));
 }

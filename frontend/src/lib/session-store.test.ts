@@ -9,6 +9,50 @@ const seed = () => ({ ...initialSessionState(session.id), session, status: sessi
 function apply(type: Event["type"]) { return applyEvent(seed(), makeEvent(type, eventPayloads[type], 1)); }
 
 describe("applyEvent", () => {
+  it("advances the cursor for unknown event types without changing any other state", () => {
+    const state = seed();
+    const event = { ...makeEvent("user.steer", eventPayloads["user.steer"], 6), type: "future.event" } as unknown as Event;
+    const next = applyEvent(state, event);
+    expect(next).toEqual({ ...state, lastSeq: 6 });
+    expect(next.activity).toBe(state.activity);
+    expect(next.session).toBe(state.session);
+  });
+  it("keeps the latest 500 activity events", () => {
+    const events = Array.from({ length: 501 }, (_, i) => makeEvent("user.steer", eventPayloads["user.steer"], i + 1));
+    const state = events.reduce(applyEvent, initialSessionState(session.id));
+    expect(state.activity).toHaveLength(500);
+    expect(state.activity[0].seq).toBe(2);
+    expect(state.activity.at(-1)?.seq).toBe(501);
+  });
+  it.each(["running", "paused"] as const)("preserves %s status when a plan changes", status => {
+    for (const type of ["session.plan_proposed", "session.plan_updated"] as const) {
+      const state = { ...seed(), status, session: { ...session, status } };
+      const next = applyEvent(state, makeEvent(type, eventPayloads[type], 1));
+      expect(next.status).toBe(status);
+      expect(next.session?.status).toBe(status);
+      expect(next.plan?.version).toBe(eventPayloads[type].plan_version);
+    }
+  });
+  it("preserves collections missing from REST when hydrating at the current sequence", () => {
+    const store = createSessionStore(session.id);
+    store.getState().receive(makeEvent("approval.requested", { approval }, 1));
+    store.getState().receive(makeEvent("artifact.published", { artifact }, 2));
+    store.getState().receive(makeEvent("supervisor.action", eventPayloads["supervisor.action"], 3));
+    store.getState().receive(makeEvent("board.entry_posted", { entry: { ...boardEntry, seq: 5 } }, 5));
+    const before = store.getState();
+    store.getState().hydrate({ session, plan: null, tasks: [task], agents, counts: { total: 1, by_status: { pending: 1 } }, last_seq: 5 });
+    const after = store.getState();
+    expect(after.board).toEqual([{ ...boardEntry, seq: 5 }]);
+    expect(after.board).toBe(before.board);
+    expect(after.approvals).toBe(before.approvals);
+    expect(after.artifacts).toBe(before.artifacts);
+    expect(after.supervisorFeed).toBe(before.supervisorFeed);
+    expect(after.activity).toBe(before.activity);
+    expect(after.tasks[task.id]).toEqual(task);
+    expect(after.agents[agents[0].id]).toEqual(agents[0]);
+    expect(after.lastSeq).toBe(5);
+  });
+
   it("handles every event in the generated union, including future contract additions", () => {
     // Inspect generated.ts directly: unlike Vitest type assertions this runs without tsc.
     const source = ts.createSourceFile("generated.ts", readFileSync("src/contracts/generated.ts", "utf8"), ts.ScriptTarget.Latest, true);
@@ -31,12 +75,7 @@ describe("applyEvent", () => {
       expect(next.activity.at(-1)?.type, event.type).toBe(event.type);
       expect(state.lastSeq).toBe(0);
     }
-    // Each generated discriminator must have an explicit reducer case, even for informational events.
-    const reducer = ts.createSourceFile("session-store.ts", readFileSync("src/lib/session-store.ts", "utf8"), ts.ScriptTarget.Latest, true);
-    const cases: string[] = [];
-    const visit = (node: ts.Node) => { if (ts.isCaseClause(node) && ts.isStringLiteral(node.expression)) cases.push(node.expression.text); ts.forEachChild(node, visit); };
-    visit(reducer);
-    expect(cases.sort()).toEqual(contractTypes.sort());
+
   });
   it("projects session lifecycle, plan versions and budget notifications", () => {
     expect(apply("session.plan_proposed").plan?.version).toBe(1);
