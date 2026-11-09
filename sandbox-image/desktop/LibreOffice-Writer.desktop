@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LibreOffice Writer
+GenericName=Word Processor
+Comment=LibreOffice Writer word processor
+Exec=libreoffice --writer
+Terminal=false
+Icon=libreoffice-writer
+Categories=Office;WordProcessor;X-AgentPlatform;

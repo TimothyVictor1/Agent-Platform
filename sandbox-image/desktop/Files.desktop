@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Files
+GenericName=File Manager
+Comment=Browse files in /home/agent
+Exec=thunar /home/agent
+Terminal=false
+Icon=org.xfce.thunar
+Categories=System;FileManager;X-AgentPlatform;

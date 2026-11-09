@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LibreOffice Calc
+GenericName=Spreadsheet
+Comment=LibreOffice Calc spreadsheet
+Exec=libreoffice --calc
+Terminal=false
+Icon=libreoffice-calc
+Categories=Office;Spreadsheet;X-AgentPlatform;

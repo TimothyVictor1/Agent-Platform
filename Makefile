@@ -13,8 +13,8 @@ FRONTEND := cd frontend &&
 COMPOSE := docker compose
 
 .PHONY: help dev api runtime web test test-backend test-frontend lint lint-backend \
-	lint-frontend typecheck format contracts contracts-check sandbox-image db-up db-down \
-	db-migrate debug-bundle install
+	lint-frontend lint-sandbox typecheck format contracts contracts-check sandbox-image \
+	db-up db-down db-migrate debug-bundle install
 
 help:
 	@grep -E '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -53,6 +53,11 @@ lint-backend:
 lint-frontend:
 	$(FRONTEND) $(PNPM) lint
 	$(FRONTEND) $(PNPM) typecheck
+
+lint-sandbox: ## Ruff + ruff format + mypy --strict for the sandbox control server
+	$(BACKEND) uv run ruff check ../sandbox-image/control
+	$(BACKEND) uv run ruff format --check ../sandbox-image/control
+	$(BACKEND) uv run mypy --strict ../sandbox-image/control
 
 typecheck: ## Type-check backend (mypy --strict) and frontend (tsc)
 	$(BACKEND) uv run mypy src tests

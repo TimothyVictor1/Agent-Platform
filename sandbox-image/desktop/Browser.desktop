@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Browser
+GenericName=Web Browser
+Comment=Firefox ESR starting on about:blank
+Exec=/usr/local/bin/firefox --new-window about:blank
+Terminal=false
+Icon=firefox
+Categories=Network;WebBrowser;X-AgentPlatform;

@@ -1,0 +1,26 @@
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableAppUpdate": true,
+    "DisableFeedbackCommands": true,
+    "DisableCrashReporter": true,
+    "DontCheckDefaultBrowser": true,
+    "SearchSuggestEnabled": false,
+    "Homepage": { "URL": "about:blank", "Locked": true },
+    "StartPage": { "Value": "homepage", "Locked": true },
+    "Preferences": {
+      "browser.shell.checkDefaultBrowser": { "Value": false },
+      "browser.warnOnQuit": { "Value": false },
+      "browser.tabs.warnOnClose": { "Value": false },
+      "browser.sessionstore.resume_from_crash": { "Value": false },
+      "datareporting.policy.dataSubmissionEnabled": { "Value": false },
+      "toolkit.telemetry.enabled": { "Value": false },
+      "signon.rememberSignons": { "Value": false },
+      "browser.formfill.enable": { "Value": false },
+      "browser.ping-centre.telemetry": { "Value": false },
+      "app.update.auto": { "Value": false }
+    }
+  }
+}

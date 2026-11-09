@@ -105,6 +105,18 @@ jobs:
       - run: corepack enable && cd frontend && pnpm install --frozen-lockfile
       - run: make contracts-check
 
+  sandbox-image-lint:
+    name: Sandbox control server (ruff, mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: cd backend && uv sync --locked
+      - run: make lint-sandbox
+
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
