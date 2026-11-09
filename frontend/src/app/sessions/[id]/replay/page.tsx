@@ -1,5 +1,5 @@
-import { SessionPlaceholder } from "@/components/session-placeholder";
+import { ReplayPage } from "@/components/replay/replay-page";
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <SessionPlaceholder key={id} sessionId={id} title="Replay" />;
+  return <ReplayPage key={id} sessionId={id} />;
 }
