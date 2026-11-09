@@ -27,6 +27,8 @@ export function frameAt(frames: readonly Frame[], ts: number) {
 export const actorLane = (actor: Actor) => actor.type === "agent" && actor.id ? actor.id : SUPERVISOR;
 export function eventLane(event: Event): string {
   if (event.type === "board.entry_posted") return actorLane(event.payload.entry.author);
+  if (event.type === "user.steer") return actorLane(event.actor);
+  if (event.type.startsWith("supervisor.")) return SUPERVISOR;
   if (event.type === "approval.requested" || event.type === "approval.decided") return event.payload.approval.agent_id;
   if (event.type === "agent.created") return event.payload.agent.id;
   if (event.actor.type === "supervisor") return SUPERVISOR;

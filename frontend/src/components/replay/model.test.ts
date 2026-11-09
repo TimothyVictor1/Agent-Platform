@@ -22,6 +22,9 @@ describe("replay mapping", () => {
     const event = makeEvent("board.entry_posted", { entry }, 1);
     expect(eventLane(event)).toBe("a"); expect(recipients(event)).toEqual(["b", "c"]);
     expect(recipients(makeEvent("board.entry_posted", eventPayloads["board.entry_posted"], 2))).toEqual([]);
+    const steer = makeEvent("user.steer", { agent_id: "b", text: "Continue", entry_id: null }, 3);
+    expect(eventLane(steer)).toBe("supervisor"); expect(recipients(steer)).toEqual(["b"]);
+    expect(eventLane(makeEvent("supervisor.triggered", eventPayloads["supervisor.triggered"], 4))).toBe("supervisor");
     expect(new Set(Object.values(boardSymbols)).size).toBe(9);
   });
   it("indexes six lanes and 3,000 frames, picks latest earlier frame and closes task/takeover spans", () => {
