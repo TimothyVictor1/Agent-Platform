@@ -5,7 +5,8 @@ Many open GUI models answer with text actions instead of structured tool calls.
 matches ``agentplatform.runtime.agent.actions.FallbackParser``, so the runtime wiring
 (T13) passes it to ``AgentRuntime(fallback_parser=...)`` unchanged.
 
-Recognised forms, in text order:
+Recognised forms, in text order (JSON inside a Python call, e.g. the text of
+``type_text('{"tool": ..}')``, is that call's argument, not another call):
 
 * JSON objects ``{"tool": .., "args": {..}}``, ``{"name": .., "arguments": {..}}``
   (arguments may be a JSON string) and ``{"function": {"name": .., "arguments": ..}}``,
@@ -380,8 +381,11 @@ def _map_python(
 
 def _python_calls(
     text: str, skip: list[tuple[int, int]], valid: Collection[str]
-) -> list[tuple[int, str, dict[str, Any]]]:
+) -> tuple[list[tuple[int, str, dict[str, Any]]], list[tuple[int, int]]]:
+    """Mapped calls as ``(start, name, args)`` and the ``(start, end)`` span of every
+    call that parsed (mapped or not). Calls starting inside ``skip`` are ignored."""
     found: list[tuple[int, str, dict[str, Any]]] = []
+    parsed_spans: list[tuple[int, int]] = []
     pos = 0
     tries = 0
     while tries < MAX_CANDIDATES and (m := _CALL_START.search(text, pos)) is not None:
@@ -398,12 +402,13 @@ def _python_calls(
         pos = end if parsed else m.end()
         if parsed is None:
             continue
+        parsed_spans.append((start, end))
         name, args, kwargs = parsed
         prefixed = text.startswith("pyautogui.", start)
         mapped = _map_python(name, args, kwargs, prefixed, valid)
         if mapped is not None:
             found.append((start, mapped[0], mapped[1]))
-    return found
+    return found, parsed_spans
 
 
 def parse_text_tool_calls(text: str, valid_tool_names: Collection[str]) -> list[ToolCall]:
@@ -417,11 +422,14 @@ def parse_text_tool_calls(text: str, valid_tool_names: Collection[str]) -> list[
     text = text[:MAX_TEXT_CHARS]
     valid = set(valid_tool_names)
 
-    found: list[tuple[int, str, dict[str, Any]]] = []
     spans = _json_spans(text)
+    found, call_spans = _python_calls(text, [(a, b) for a, b, _ in spans], valid)
     for start, _end, value in spans:
+        # JSON inside a parsed Python call is one of its literal arguments (e.g. text
+        # for type_text), not a second call.
+        if any(a < start < b for a, b in call_spans):
+            continue
         found.extend((start, name, args) for name, args in _json_calls(value))
-    found.extend(_python_calls(text, [(a, b) for a, b, _ in spans], valid))
     found.sort(key=lambda item: item[0])
 
     calls = [
