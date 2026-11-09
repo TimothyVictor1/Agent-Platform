@@ -118,6 +118,16 @@ class ControlClient:
         )
         assert status == 200, payload[:300]
 
+    def move(self, x: int, y: int) -> None:
+        status, payload = self.call("POST", "/move", body={"x": x, "y": y})
+        assert status == 200, payload[:300]
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        status, payload = self.call(
+            "POST", "/drag", body={"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+        )
+        assert status == 200, payload[:300]
+
     def scroll(self, x: int, y: int, direction: str, amount: int) -> None:
         status, payload = self.call(
             "POST",
@@ -183,6 +193,17 @@ def sandbox() -> SimpleNamespace:
         name,
         "-e",
         f"CONTROL_TOKEN={token}",
+        # Same hardened runtime the docker_local provider (T07) will use:
+        # root only setuid-drops to `agent` (supervisord), everything else
+        # needs no capability.
+        "--cap-drop",
+        "ALL",
+        "--cap-add",
+        "SETUID",
+        "--cap-add",
+        "SETGID",
+        "--security-opt",
+        "no-new-privileges",
         "-p",
         "127.0.0.1::7000",
         "-p",

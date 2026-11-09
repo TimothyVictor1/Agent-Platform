@@ -15,6 +15,9 @@
 #
 # Security summary (details in sandbox-image/README.md):
 #   - single non-root user `agent` (uid 1000) owns the desktop and all inputs
+#   - runs hardened with --cap-drop ALL --cap-add SETUID --cap-add SETGID
+#     --security-opt no-new-privileges: root exists only to setuid-drop to
+#     `agent`; all ownership is fixed here at build time
 #   - X server blocked from TCP; Xauthority cookie restricts local clients
 #   - x11vnc bound to localhost inside the container; only websockify
 #     (6080) and the control server (7000) are published, on 127.0.0.1
@@ -107,17 +110,24 @@ COPY desktop/ /home/agent/Desktop/
 COPY scripts/start-desktop.sh scripts/start-x11vnc.sh scripts/start-novnc.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
+# All ownership is fixed at build time so the runtime entrypoint needs no
+# chown: with --cap-drop ALL, root could not write into agent-owned files
+# (no DAC_OVERRIDE) and supervisord only needs SETUID/SETGID to drop to
+# `agent`. The empty token and Xauthority files are agent-owned and filled
+# in by the entrypoint running as agent.
 RUN userdel --remove ubuntu 2>/dev/null || true \
     && useradd --create-home --uid 1000 --user-group --shell /bin/bash agent \
     && cp -r /etc/skel/. /home/agent/ \
-    && mkdir -p /home/agent/Shared \
     && chmod +x /home/agent/Desktop/*.desktop /usr/local/bin/entrypoint.sh \
                 /usr/local/bin/start-desktop.sh /usr/local/bin/start-x11vnc.sh \
                 /usr/local/bin/start-novnc.sh \
+    && mkdir -p /home/agent/Shared /tmp/xdg-runtime /var/log/supervisor \
     && chown -R agent:agent /home/agent \
-    && mkdir -p /tmp/xdg-runtime /var/log/supervisor \
     && chown agent:agent /tmp/xdg-runtime \
-    && chmod 700 /tmp/xdg-runtime
+    && chmod 700 /tmp/xdg-runtime \
+    && install -d -o root -g root -m 0755 /var/log/supervisor \
+    && install -o agent -g agent -m 0600 /dev/null /home/agent/.Xauthority \
+    && install -o agent -g agent -m 0600 /dev/null /run/control-token
 
 EXPOSE 6080 7000
 
