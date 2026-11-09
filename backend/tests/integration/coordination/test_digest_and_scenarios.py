@@ -143,10 +143,15 @@ async def test_two_agents_a_posts_a_fact_at_step_2_and_b_sees_it_at_step_3(
     bus: InMemoryBus,
 ) -> None:
     a_posted = asyncio.Event()
+    b_built_step_2 = asyncio.Event()
 
     def ada_step_3(_: ModelRequest) -> ModelResponse:
         a_posted.set()  # Ada's step-2 post is committed before her step-3 request is built
         return click(3)
+
+    def brook_step_2(_: ModelRequest) -> ModelResponse:
+        b_built_step_2.set()  # Brook's step-2 request (no fact yet) exists before Ada posts
+        return click(2)
 
     model = FakeModel(
         {
@@ -169,7 +174,7 @@ async def test_two_agents_a_posts_a_fact_at_step_2_and_b_sees_it_at_step_3(
             ],
             "Brook": [
                 click(1),
-                click(2),
+                brook_step_2,
                 click(3),
                 click(4),
                 tool_response("submit_result", summary="done", outputs={"result": "ok"}),
@@ -197,7 +202,8 @@ async def test_two_agents_a_posts_a_fact_at_step_2_and_b_sees_it_at_step_3(
 
     ada_task = make_task(session_id=world.id, key="T1", tags=["pricing"])
     brook_task = make_task(session_id=world.id, key="T2", tags=["pricing"])
-    ada_rt = runtime(world.ada, digests)
+    # Ada's step-2 digest (built just before her step-2 action) waits for Brook's step 2.
+    ada_rt = runtime(world.ada, GatedDigest(digests, on_call=2, gate=b_built_step_2))
     brook_rt = runtime(world.brook, GatedDigest(digests, on_call=3, gate=a_posted))
     async with asyncio.timeout(60):
         a_out, b_out = await asyncio.gather(
