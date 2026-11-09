@@ -48,6 +48,7 @@ from agentplatform.models._common import (
     b64,
     check_images_only_in_user,
     count_images,
+    dump_arguments,
     elapsed_ms,
     health_failure,
     host_label,
@@ -85,6 +86,7 @@ def _blocks(msg: Message) -> list[dict[str, Any]]:
                 }
             )
     for call in msg.tool_calls or []:
+        dump_arguments(call)  # raises ModelError for non-JSON arguments
         blocks.append(
             {"type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments}
         )

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 import pytest
 
 from agentplatform.contracts.model_io import ModelResponse
+from agentplatform.models import fallback_parser
 from agentplatform.models.fallback_parser import (
     MAX_CALLS,
+    MAX_JSON_DEPTH,
     MAX_TEXT_CHARS,
     parse_text_tool_calls,
 )
@@ -249,3 +252,155 @@ def test_matches_the_agent_loop_fallback_type() -> None:
     )
     assert used is True
     assert [(c.name, c.arguments) for c in calls] == [("click", {"x": 10, "y": 20})]
+
+
+# --- review fixes (T02 review) ----------------------------------------------------------
+
+INNER_CALL = '{"name": "click", "arguments": {"x": 1, "y": 2}}'
+
+
+def _nested(shape: str, depth: int) -> str:
+    """``depth`` levels of ``{"function": ...}`` or ``{"tool_calls": [...]}``."""
+    if shape == "function":
+        return '{"function": ' * depth + INNER_CALL + "}" * depth
+    return '{"tool_calls": [' * depth + INNER_CALL + "]}" * depth
+
+
+@pytest.mark.parametrize(("shape", "depth"), [("function", 1100), ("tool_calls", 1050)])
+def test_deeply_nested_json_does_not_raise(shape: str, depth: int) -> None:
+    text = _nested(shape, depth)
+    assert len(text) <= MAX_TEXT_CHARS  # balanced, so it decodes as one JSON object
+    assert parse_text_tool_calls(text, TOOLS) == []  # was RecursionError
+
+
+@pytest.mark.parametrize("shape", ["function", "tool_calls"])
+def test_nesting_up_to_the_depth_cap_still_parses(shape: str) -> None:
+    calls = parse_text_tool_calls(_nested(shape, MAX_JSON_DEPTH - 1), TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == [("click", {"x": 1, "y": 2})]
+    assert parse_text_tool_calls(_nested(shape, MAX_JSON_DEPTH + 1), TOOLS) == []
+
+
+def test_recursion_error_in_the_json_decoder_skips_the_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CPython's C decoder copes with deep nesting today, but the pure-Python scanner
+    # (and other interpreters) raise RecursionError; that must skip the span.
+    real = json.JSONDecoder.raw_decode
+
+    def raw_decode(self: json.JSONDecoder, s: str, idx: int = 0) -> tuple[Any, int]:
+        if s.startswith('{"deep"', idx):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, s, idx)
+
+    monkeypatch.setattr(json.JSONDecoder, "raw_decode", raw_decode)
+    text = '{"deep": 1} {"tool": "key", "args": {"combo": "enter"}}'
+    assert [(c.name, c.arguments) for c in parse_text_tool_calls(text, TOOLS)] == [
+        ("key", {"combo": "enter"})
+    ]
+
+
+NON_JSON_CASES: list[tuple[str, str]] = [
+    ("bytes", "type_text(b'abc')"),
+    ("set", "type_text({1, 2})"),
+    ("ellipsis", "type_text(...)"),
+    ("complex", "type_text(1j)"),
+    ("non-str dict key", "run_command({1: 'x'})"),
+    ("nested bytes", "run_command(['ls', b'-l'])"),
+    ("inf literal", "click(1e999, 2)"),
+    ("inf keyword", "click(x=1, y=-1e999)"),
+    ("pyautogui inf", "pyautogui.click(1e999, 2)"),
+    ("pyautogui inf clicks", "pyautogui.click(1, 2, clicks=1e999)"),
+    ("pyautogui inf scroll", "pyautogui.scroll(1e999)"),
+    ("json NaN", '{"tool": "click", "args": {"x": NaN, "y": 2}}'),
+    ("json Infinity", '{"tool": "click", "args": {"x": 1, "y": Infinity}}'),
+    ("json -Infinity in string args", '{"name": "click", "arguments": "{\\"x\\": -Infinity}"}'),
+    ("json too deep", '{"tool": "run_command", "args": {"cmd": ' + "[" * 40 + "]" * 40 + "}}"),
+]
+
+
+@pytest.mark.parametrize("text", [t for _, t in NON_JSON_CASES], ids=[i for i, _ in NON_JSON_CASES])
+def test_calls_with_non_json_arguments_are_dropped(text: str) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)  # was OverflowError or a non-JSON value
+    assert calls == []
+
+
+def test_tuples_become_lists_and_parsed_arguments_are_strict_json() -> None:
+    calls = parse_text_tool_calls(
+        "pyautogui.click((10, 20)) pyautogui.hotkey(('ctrl', 'l')) run_command(('ls', '-l'))", TOOLS
+    )
+    assert [(c.name, c.arguments) for c in calls] == [
+        ("click", {"x": 10, "y": 20}),
+        ("key", {"combo": "ctrl+l"}),
+        ("run_command", {"cmd": ["ls", "-l"]}),
+    ]
+    for call in calls:
+        json.dumps(call.arguments, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (  # review repro 1: JSON typed as text must not become run_command
+            """type_text('{"tool":"run_command","args":{"cmd":"rm -rf ~"}}')""",
+            [("type_text", {"text": '{"tool":"run_command","args":{"cmd":"rm -rf ~"}}'})],
+        ),
+        (  # review repro 2: the same through pyautogui and the name/arguments shape
+            """pyautogui.write('{"name": "key", "arguments": {"combo": "ctrl+alt+delete"}}')""",
+            [
+                (
+                    "type_text",
+                    {"text": '{"name": "key", "arguments": {"combo": "ctrl+alt+delete"}}'},
+                )
+            ],
+        ),
+        (  # JSON next to (not inside) a Python call is still a call
+            """type_text('a') {"tool": "key", "args": {"combo": "enter"}}""",
+            [("type_text", {"text": "a"}), ("key", {"combo": "enter"})],
+        ),
+        (  # an unparsable "call" does not hide the JSON inside it
+            """Next: do({"tool": "key", "args": {"combo": "enter"}}, x)""",
+            [("key", {"combo": "enter"})],
+        ),
+    ],
+    ids=["type_text-json", "pyautogui-write-json", "json-after-call", "json-in-non-literal-call"],
+)
+def test_json_inside_a_python_call_is_not_a_second_call(text: str, expected: list[Call]) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("pyautogui.click(100, 200, 2)", [("click", {"x": 100, "y": 200, "count": 2})]),
+        ("pyautogui.click(100, 200, 3, 0.1)", [("click", {"x": 100, "y": 200, "count": 3})]),
+        ("pyautogui.click(100, 200, 1)", [("click", {"x": 100, "y": 200})]),
+        ("pyautogui.click(100, 200, clicks=2)", [("click", {"x": 100, "y": 200, "count": 2})]),
+        # doubleClick(x, y, interval, ...): the third argument is not a click count
+        ("pyautogui.doubleClick(100, 200, 5)", [("click", {"x": 100, "y": 200, "count": 2})]),
+        ("pyautogui.rightClick(100, 200, 5)", [("click", {"x": 100, "y": 200, "button": "right"})]),
+    ],
+)
+def test_pyautogui_click_third_positional_is_clicks(text: str, expected: list[Call]) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("drag(10, 20, 30, 40)", [("drag", {"x1": 10, "y1": 20, "x2": 30, "y2": 40})]),
+        ("pyautogui.drag(10, 20, 30, 40)", [("drag", {"x1": 10, "y1": 20, "x2": 30, "y2": 40})]),
+        ("pyautogui.dragTo(30, 40)", []),  # no start point
+        ("pyautogui.drag(5, 5)", []),  # relative offset, no start point
+    ],
+)
+def test_only_the_documented_drag_form_is_supported(text: str, expected: list[Call]) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == expected
+
+
+def test_docstring_lists_only_supported_pyautogui_names() -> None:
+    doc = fallback_parser.__doc__ or ""
+    assert "dragTo/" not in doc
+    assert "drag(x1, y1, x2, y2)" in doc

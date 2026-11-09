@@ -5,18 +5,25 @@ Many open GUI models answer with text actions instead of structured tool calls.
 matches ``agentplatform.runtime.agent.actions.FallbackParser``, so the runtime wiring
 (T13) passes it to ``AgentRuntime(fallback_parser=...)`` unchanged.
 
-Recognised forms, in text order:
+Recognised forms, in text order (JSON inside a Python call, e.g. the text of
+``type_text('{"tool": ..}')``, is that call's argument, not another call):
 
 * JSON objects ``{"tool": .., "args": {..}}``, ``{"name": .., "arguments": {..}}``
   (arguments may be a JSON string) and ``{"function": {"name": .., "arguments": ..}}``,
   bare or inside ```json fences, one or several, also inside a JSON list.
 * Python-style calls: ``click(512, 300)``, ``click(x=512, y=300)``,
   ``type_text("hello")``, ``key("ctrl+l")`` and the pyautogui vocabulary
-  (``pyautogui.click/doubleClick/rightClick/moveTo/dragTo/write/typewrite/press/
-  hotkey/scroll/hscroll``).
+  (``pyautogui.click/leftClick/rightClick/middleClick/doubleClick/tripleClick/moveTo/
+  write/typewrite/press/hotkey/scroll/vscroll/hscroll``).
+* Drags only in the platform's absolute form ``drag(x1, y1, x2, y2)`` (also written
+  ``pyautogui.drag(x1, y1, x2, y2)``). ``pyautogui.dragTo(x, y)`` and the relative
+  ``pyautogui.drag(dx, dy)`` have no start point and are not recognised.
 
 The text is untrusted model output: Python calls are parsed with ``ast`` and only
 literal arguments are accepted (``ast.literal_eval``); nothing is ever executed.
+Arguments must be plain JSON data (``_json_safe``): calls with bytes, sets, ``...``,
+NaN or infinite numbers, or values nested deeper than ``MAX_JSON_DEPTH`` are dropped,
+so every returned ``ToolCall`` can be sent back to a provider as strict JSON.
 Calls whose mapped name is not in ``valid_tool_names`` are dropped. The registry
 validates arguments, so this parser only maps names and argument positions.
 
@@ -28,6 +35,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import re
 import uuid
 from collections.abc import Callable, Collection
@@ -35,7 +43,13 @@ from typing import Any, TypeGuard
 
 from agentplatform.contracts.model_io import ToolCall
 
-__all__ = ["MAX_CALLS", "MAX_TEXT_CHARS", "SCREEN_CENTRE", "parse_text_tool_calls"]
+__all__ = [
+    "MAX_CALLS",
+    "MAX_JSON_DEPTH",
+    "MAX_TEXT_CHARS",
+    "SCREEN_CENTRE",
+    "parse_text_tool_calls",
+]
 
 MAX_TEXT_CHARS = 20_000
 """Longer text is truncated before parsing (bounds the work on hostile input)."""
@@ -46,6 +60,9 @@ MAX_CALL_CHARS = 4_000
 """A Python-style call longer than this is not an action (type_text allows 2000)."""
 MAX_CANDIDATES = 256
 """At most this many ``{`` / ``name(`` positions are tried, bounding hostile input."""
+MAX_JSON_DEPTH = 32
+"""Deeper ``function`` / ``tool_calls`` nesting, or deeper argument values, is not an
+action; the call is dropped (bounds recursion on hostile input)."""
 
 _NAME_KEYS = ("tool", "name", "action", "tool_name", "function")
 _ARG_KEYS = ("args", "arguments", "parameters", "input", "params")
@@ -90,7 +107,7 @@ def _json_spans(text: str) -> list[tuple[int, int, Any]]:
         tries += 1
         try:
             value, end = decoder.raw_decode(text, i)
-        except ValueError:
+        except (ValueError, RecursionError):
             i = text.find("{", i + 1)
             continue
         spans.append((i, end, value))
@@ -98,24 +115,55 @@ def _json_spans(text: str) -> list[tuple[int, int, Any]]:
     return spans
 
 
+def _json_safe(value: Any, depth: int = 0) -> Any:
+    """``value`` as plain JSON data, or ``ValueError``.
+
+    Accepts ``None``, ``str``, ``bool``, ``int``, finite ``float``, lists (tuples become
+    lists) and dicts with string keys, nested at most ``MAX_JSON_DEPTH`` deep. Rejects
+    everything else: bytes, sets, ``Ellipsis``, complex numbers, NaN and +-inf.
+    """
+    if depth > MAX_JSON_DEPTH:
+        raise ValueError("value is nested too deeply")
+    if value is None or isinstance(value, str | int):  # bool is an int
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("number is not finite")
+        return value
+    if isinstance(value, list | tuple):
+        return [_json_safe(v, depth + 1) for v in value]
+    if isinstance(value, dict):
+        if not all(isinstance(k, str) for k in value):
+            raise ValueError("object keys must be strings")
+        return {k: _json_safe(v, depth + 1) for k, v in value.items()}
+    raise ValueError(f"{type(value).__name__} is not JSON data")
+
+
 def _coerce_args(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return {}
-    if isinstance(raw, dict):
-        return {str(k): v for k, v in raw.items()}
     if isinstance(raw, str):
+        if not raw.strip():
+            return {}
         try:
-            parsed = json.loads(raw) if raw.strip() else {}
-        except ValueError:
+            raw = json.loads(raw)
+        except (ValueError, RecursionError):
             return {"_raw": raw}
-        return {str(k): v for k, v in parsed.items()} if isinstance(parsed, dict) else None
-    return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        args: dict[str, Any] = _json_safe(raw)
+    except ValueError:  # NaN/Infinity (json accepts them), non-string keys, too deep
+        return None
+    return args
 
 
-def _from_json_object(obj: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+def _from_json_object(obj: dict[str, Any], depth: int = 0) -> tuple[str, dict[str, Any]] | None:
+    if depth >= MAX_JSON_DEPTH:
+        return None
     fn = obj.get("function")
     if isinstance(fn, dict):  # OpenAI style {"type":"function","function":{...}}
-        return _from_json_object(fn)
+        return _from_json_object(fn, depth + 1)
     name = next((obj[k] for k in _NAME_KEYS if isinstance(obj.get(k), str)), None)
     if not name:
         return None
@@ -126,14 +174,16 @@ def _from_json_object(obj: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return name.strip(), args
 
 
-def _json_calls(value: Any) -> list[tuple[str, dict[str, Any]]]:
+def _json_calls(value: Any, depth: int = 0) -> list[tuple[str, dict[str, Any]]]:
+    if depth >= MAX_JSON_DEPTH:
+        return []
     if isinstance(value, dict):
         if isinstance(value.get("tool_calls"), list):
-            return [c for item in value["tool_calls"] for c in _json_calls(item)]
-        found = _from_json_object(value)
+            return [c for item in value["tool_calls"] for c in _json_calls(item, depth + 1)]
+        found = _from_json_object(value, depth)
         return [found] if found else []
     if isinstance(value, list):
-        return [c for item in value for c in _json_calls(item)]
+        return [c for item in value for c in _json_calls(item, depth + 1)]
     return []
 
 
@@ -169,7 +219,7 @@ def _call_end(text: str, open_paren: int) -> int | None:
 
 
 def _literal(node: ast.expr) -> Any:
-    return ast.literal_eval(node)
+    return _json_safe(ast.literal_eval(node))
 
 
 def _parse_call(src: str) -> tuple[str, list[Any], dict[str, Any]] | None:
@@ -202,7 +252,7 @@ def _parse_call(src: str) -> tuple[str, list[Any], dict[str, Any]] | None:
 
 
 def _is_num(v: object) -> TypeGuard[int | float]:
-    return isinstance(v, int | float) and not isinstance(v, bool)
+    return isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _xy(args: list[Any], kwargs: dict[str, Any]) -> tuple[Any, Any] | None:
@@ -216,8 +266,12 @@ def _xy(args: list[Any], kwargs: dict[str, Any]) -> tuple[Any, Any] | None:
 
 
 def _pg_click(
-    button: str | None = None, count: int | None = None
+    button: str | None = None, count: int | None = None, *, positional_clicks: bool = False
 ) -> Callable[[list[Any], dict[str, Any]], tuple[str, dict[str, Any]] | None]:
+    """``positional_clicks``: the third positional argument is the click count, as in
+    ``pyautogui.click(x, y, clicks, interval, button)``. (For ``doubleClick`` and
+    friends the third argument is the interval.)"""
+
     def build(args: list[Any], kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
         xy = _xy(args, kwargs)
         if xy is None:
@@ -227,6 +281,8 @@ def _pg_click(
         if isinstance(btn, str) and btn != "left":
             out["button"] = btn
         n = count or kwargs.get("clicks") or kwargs.get("count")
+        if n is None and positional_clicks and len(args) > 2:
+            n = args[2]
         if _is_num(n) and int(n) > 1:
             out["count"] = int(n)
         return "click", out
@@ -284,7 +340,7 @@ def _pg_drag(args: list[Any], kwargs: dict[str, Any]) -> tuple[str, dict[str, An
 
 
 _PYAUTOGUI: dict[str, Callable[[list[Any], dict[str, Any]], tuple[str, dict[str, Any]] | None]] = {
-    "click": _pg_click(),
+    "click": _pg_click(positional_clicks=True),
     "leftClick": _pg_click("left"),
     "rightClick": _pg_click("right"),
     "middleClick": _pg_click("middle"),
@@ -334,8 +390,11 @@ def _map_python(
 
 def _python_calls(
     text: str, skip: list[tuple[int, int]], valid: Collection[str]
-) -> list[tuple[int, str, dict[str, Any]]]:
+) -> tuple[list[tuple[int, str, dict[str, Any]]], list[tuple[int, int]]]:
+    """Mapped calls as ``(start, name, args)`` and the ``(start, end)`` span of every
+    call that parsed (mapped or not). Calls starting inside ``skip`` are ignored."""
     found: list[tuple[int, str, dict[str, Any]]] = []
+    parsed_spans: list[tuple[int, int]] = []
     pos = 0
     tries = 0
     while tries < MAX_CANDIDATES and (m := _CALL_START.search(text, pos)) is not None:
@@ -352,12 +411,13 @@ def _python_calls(
         pos = end if parsed else m.end()
         if parsed is None:
             continue
+        parsed_spans.append((start, end))
         name, args, kwargs = parsed
         prefixed = text.startswith("pyautogui.", start)
         mapped = _map_python(name, args, kwargs, prefixed, valid)
         if mapped is not None:
             found.append((start, mapped[0], mapped[1]))
-    return found
+    return found, parsed_spans
 
 
 def parse_text_tool_calls(text: str, valid_tool_names: Collection[str]) -> list[ToolCall]:
@@ -371,11 +431,14 @@ def parse_text_tool_calls(text: str, valid_tool_names: Collection[str]) -> list[
     text = text[:MAX_TEXT_CHARS]
     valid = set(valid_tool_names)
 
-    found: list[tuple[int, str, dict[str, Any]]] = []
     spans = _json_spans(text)
+    found, call_spans = _python_calls(text, [(a, b) for a, b, _ in spans], valid)
     for start, _end, value in spans:
+        # JSON inside a parsed Python call is one of its literal arguments (e.g. text
+        # for type_text), not a second call.
+        if any(a < start < b for a, b in call_spans):
+            continue
         found.extend((start, name, args) for name, args in _json_calls(value))
-    found.extend(_python_calls(text, [(a, b) for a, b, _ in spans], valid))
     found.sort(key=lambda item: item[0])
 
     calls = [

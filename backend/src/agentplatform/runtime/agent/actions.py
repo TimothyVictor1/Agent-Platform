@@ -109,11 +109,27 @@ FallbackParser = Callable[[str, Collection[str]], list[ToolCall]]
 
 
 def _decode_rgb(png_bytes: bytes) -> Image.Image:
-    """Decode a screenshot to RGB. A corrupt screenshot is a sandbox fault."""
+    """Decode a screenshot to RGB. A corrupt screenshot is a sandbox fault.
+
+    Pillow only *warns* (``DecompressionBombWarning``) for images above
+    ``Image.MAX_IMAGE_PIXELS`` and errors at twice that; both are a ``SandboxError``
+    here. The size is checked explicitly instead of escalating the warning with
+    ``warnings.catch_warnings``, which is not thread-safe (this runs in worker threads).
+    """
     try:
         with Image.open(io.BytesIO(png_bytes)) as img:
+            limit = Image.MAX_IMAGE_PIXELS
+            if limit is not None and img.width * img.height > limit:
+                raise SandboxError(
+                    f"screenshot is too large ({img.width}x{img.height} pixels, limit {limit})"
+                )
             return img.convert("RGB")
-    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+    except (
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,  # when a warnings filter turns it into an error
+    ) as exc:
         raise SandboxError("screenshot is not a valid image") from exc
 
 
@@ -227,7 +243,9 @@ def crop_region(
     (at most 4x) for reading; the result fits in 1280x1280. Returns JPEG bytes.
 
     The region is mapped onto the PNG's own pixel size, which equals ``screen_size``
-    for a well-behaved sandbox; ``(-1, -1)`` is not the centre here (it clamps to 0)."""
+    for a well-behaved sandbox; ``(-1, -1)`` is not the centre here (it clamps to 0).
+    The crop is always at least 1x1 pixel: a region starting on (or within the
+    clamping slack beyond) the right or bottom edge gives the last column or row."""
     del screen_size  # mapped via the PNG itself; kept for the public signature
     rw, rh = _number(w, "w"), _number(h, "h")
     if rw <= 0 or rh <= 0:
@@ -236,11 +254,10 @@ def crop_region(
     fx2, fy2 = _fractions(_number(x, "x") + rw, _number(y, "y") + rh, mode, obs, ("x + w", "y + h"))
     img = _decode_rgb(png_bytes)
     pw, ph = img.size
-    x1, y1, x2, y2 = round(fx1 * pw), round(fy1 * ph), round(fx2 * pw), round(fy2 * ph)
-    if x2 <= x1 or y2 <= y1:
-        raise CoordinateError(
-            f"zoom region is empty or outside the screen; {_range_help(mode, obs)}"
-        )
+    # The top-left corner is clamped onto the last pixel column/row, so a region that
+    # starts exactly on the right or bottom edge still has at least one pixel.
+    x1, y1 = min(round(fx1 * pw), pw - 1), min(round(fy1 * ph), ph - 1)
+    x2, y2 = max(round(fx2 * pw), x1 + 1), max(round(fy2 * ph), y1 + 1)
     region = img.crop((x1, y1, x2, y2))
     scale = min(ZOOM_MAX_UPSCALE, ZOOM_MAX_WIDTH / region.width, ZOOM_MAX_HEIGHT / region.height)
     if scale != 1:

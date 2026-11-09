@@ -24,16 +24,18 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import BaseModel
 
 from agentplatform.config import ModelPrice
 from agentplatform.contracts.common import HealthStatus
 from agentplatform.contracts.model_io import ModelRequest, ModelResponse
 from agentplatform.errors import ModelTimeoutError
 from agentplatform.models.base import ModelClient
-from agentplatform.models.errors import RetryableModelError, is_retryable
+from agentplatform.models.errors import RetryableModelError, is_retryable, redact_secrets
 
 __all__ = [
     "DEFAULT_DEBUG_DIR",
+    "MAX_LOG_DEPTH",
     "AccountingClient",
     "ConcurrencyLimitedClient",
     "DebugLoggingClient",
@@ -45,6 +47,8 @@ __all__ = [
 log = structlog.get_logger(__name__)
 
 DEFAULT_DEBUG_DIR = Path("data/model-debug")
+MAX_LOG_DEPTH = 64
+"""Debug-log values nested deeper than this are replaced by ``"<max-depth>"``."""
 
 
 class _Wrapper:
@@ -211,20 +215,31 @@ def _image_digest(value: str | bytes) -> dict[str, Any]:
     return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
-def redact_images(value: Any) -> Any:
+def redact_images(value: Any, depth: int = 0) -> Any:
     """Replace every ``jpeg_bytes`` (raw bytes, or base64 from a JSON-mode dump) by the
-    sha256 and size of the image bytes."""
+    sha256 and size of the image bytes. Values nested ``MAX_LOG_DEPTH`` deep become
+    ``"<max-depth>"``, so hostile payloads cannot exhaust the stack."""
+    if depth >= MAX_LOG_DEPTH:
+        return "<max-depth>"
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for k, v in value.items():
             if k == "jpeg_bytes" and isinstance(v, str | bytes):
                 out[k] = _image_digest(v)
             else:
-                out[k] = redact_images(v)
+                out[k] = redact_images(v, depth + 1)
         return out
     if isinstance(value, list):
-        return [redact_images(v) for v in value]
+        return [redact_images(v, depth + 1) for v in value]
     return value
+
+
+def _snapshot(model: BaseModel) -> Any:
+    """``model`` for the debug log (images hashed, depth capped); never raises."""
+    try:
+        return redact_images(model.model_dump())
+    except (RecursionError, ValueError, TypeError) as err:
+        return {"unloggable": type(err).__name__}
 
 
 def _safe_name(name: str) -> str:
@@ -235,9 +250,12 @@ class DebugLoggingClient(_Wrapper):
     """Appends one JSONL record per call to ``<directory>/<client>-<date>.jsonl``.
 
     Records hold the request (images replaced by sha256 hashes), the response (or the
-    error type and its safe message) and timings. API keys never reach this layer:
-    they live only inside the provider SDK client. Writes run in a worker thread and
-    never fail the model call; each record is one ``write()`` in append mode.
+    error type and its message, secrets redacted) and timings. API keys never reach this layer:
+    they live only inside the provider SDK client. Building and writing a record never
+    fails the model call: payloads that cannot be dumped (too deep, unserializable)
+    are logged as ``{"unloggable": <error type>}``, nesting is capped at
+    ``MAX_LOG_DEPTH``, and writes run in a worker thread, one ``write()`` per record in
+    append mode.
     """
 
     def __init__(self, inner: ModelClient, directory: Path = DEFAULT_DEBUG_DIR) -> None:
@@ -255,24 +273,25 @@ class DebugLoggingClient(_Wrapper):
     async def _log(self, record: dict[str, Any]) -> None:
         try:
             await asyncio.to_thread(self._write, record)
-        except (OSError, TypeError, ValueError) as err:
+        except (OSError, TypeError, ValueError, RecursionError) as err:
             log.warning("model.debug_log_failed", client=self.name, error=type(err).__name__)
 
     async def complete(self, req: ModelRequest) -> ModelResponse:
         record: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(),
             "client": self.name,
-            "request": redact_images(req.model_dump()),
+            "request": _snapshot(req),
         }
         started = time.perf_counter()
         try:
             resp = await self.inner.complete(req)
         except Exception as err:
-            record["error"] = {"type": type(err).__name__, "message": str(err)[:500]}
+            message = redact_secrets(str(err))[:500]
+            record["error"] = {"type": type(err).__name__, "message": message}
             record["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
             await self._log(record)
             raise
-        record["response"] = redact_images(resp.model_dump(mode="json"))
+        record["response"] = _snapshot(resp)
         record["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
         await self._log(record)
         return resp

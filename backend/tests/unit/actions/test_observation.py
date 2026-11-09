@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import struct
+import warnings
 import zlib
 
 import imagehash
@@ -11,7 +12,7 @@ import pytest
 from PIL import Image
 
 from agentplatform.errors import ActionError, SandboxError
-from agentplatform.runtime.agent.actions import prepare_observation
+from agentplatform.runtime.agent.actions import crop_region, prepare_observation
 from agentplatform.testing import make_png
 
 
@@ -110,3 +111,47 @@ def _bomb_png() -> bytes:
 def test_invalid_screenshot_is_a_sandbox_error(data: bytes) -> None:
     with pytest.raises(SandboxError, match="not a valid image"):
         prepare_observation(data, 1280)
+
+
+# -- decompression bombs (T03 review) ------------------------------------------------------
+
+BOMB_W, BOMB_H = 40, 30  # 1200 px: above a 1000 px limit, below Pillow's 2x hard error
+
+
+@pytest.fixture
+def low_pixel_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+
+
+@pytest.mark.usefixtures("low_pixel_limit")
+def test_decompression_bomb_warning_is_a_sandbox_error() -> None:
+    png = make_png(BOMB_W, BOMB_H)
+    with (
+        pytest.warns(Image.DecompressionBombWarning),
+        pytest.raises(SandboxError, match="too large"),
+    ):
+        prepare_observation(png, 1280)  # was decoded despite the warning
+
+
+@pytest.mark.usefixtures("low_pixel_limit")
+def test_decompression_bomb_warning_escalated_by_filters_is_a_sandbox_error() -> None:
+    png = make_png(BOMB_W, BOMB_H)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with pytest.raises(SandboxError, match="not a valid image"):
+            prepare_observation(png, 1280)
+
+
+@pytest.mark.usefixtures("low_pixel_limit")
+def test_crop_region_rejects_a_decompression_bomb_too() -> None:
+    obs = prepare_observation(make_png(20, 20), 1280)  # 400 px: under the limit
+    with (
+        pytest.warns(Image.DecompressionBombWarning),
+        pytest.raises(SandboxError, match="too large"),
+    ):
+        crop_region(make_png(BOMB_W, BOMB_H), 0, 0, 10, 10, "absolute", obs, (BOMB_W, BOMB_H))
+
+
+def test_no_pixel_limit_means_no_bomb_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", None)
+    assert prepare_observation(make_png(BOMB_W, BOMB_H), 1280).width == BOMB_W

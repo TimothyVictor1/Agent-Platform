@@ -112,3 +112,25 @@ async def test_end_to_end_cost_and_key_header() -> None:
 
 def test_package_exports() -> None:
     assert callable(parse_text_tool_calls)
+
+
+@pytest.mark.parametrize("role", [LOCAL, CLOUD], ids=["openai_compatible", "anthropic"])
+async def test_debug_logging_is_off_by_default(
+    role: RoleConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Debug logs hold full prompts, so they must be opt-in via debug_dir (T02 review).
+    name = "anthropic_text.json" if role.provider == "anthropic" else "openai_text.json"
+    data = json.loads((FIXTURES / name).read_text())
+    monkeypatch.chdir(tmp_path)
+    client = build_client(
+        role,
+        {},
+        env={"ANTHROPIC_API_KEY": "sk-ant-x"},
+        http_client=httpx2.AsyncClient(
+            transport=httpx2.MockTransport(lambda r: httpx2.Response(200, json=data))
+        ),
+    )
+    assert DebugLoggingClient not in chain(client)
+    await client.complete(ModelRequest(messages=[Message.text("user", "secret prompt")]))
+    assert list(tmp_path.iterdir()) == []  # noqa: ASYNC240  (nothing under data/model-debug)
+    await client.aclose()

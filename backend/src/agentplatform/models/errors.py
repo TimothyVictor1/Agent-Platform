@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import email.utils
 import math
+import re
 import time
 from collections.abc import Mapping
 
@@ -28,6 +29,7 @@ __all__ = [
     "is_retryable",
     "map_sdk_error",
     "parse_retry_after",
+    "redact_secrets",
 ]
 
 RETRYABLE_STATUSES = frozenset({408, 409, 429})
@@ -35,6 +37,37 @@ RETRYABLE_STATUSES = frozenset({408, 409, 429})
 
 _MAX_DETAIL = 200
 _MAX_RETRY_AFTER_S = 600.0
+
+REDACTED = "[redacted]"
+_KEY_NAMES = r"(?:x-)?api[_-]?key|key|access[_-]?token|token|secret|password"
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Authorization: Bearer/Basic <credentials>
+    (
+        re.compile(
+            r"""(?i)\b(authorization["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',;}]+"""
+        ),
+        rf"\1{REDACTED}",
+    ),
+    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]+"), rf"\1{REDACTED}"),
+    # OpenAI / Anthropic / OpenRouter style keys (sk-..., sk-ant-..., sk-or-v1-...)
+    (re.compile(r"\bsk-[A-Za-z0-9_*.-]{4,}"), f"sk-{REDACTED}"),
+    # Google API keys (Gemini)
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{16,}"), REDACTED),
+    # api_key=..., "api_key": "...", x-api-key: ..., ?key=..., token=..., password: ...
+    (
+        re.compile(rf"""(?i)\b({_KEY_NAMES})(["']?\s*[:=]\s*["']?)[^\s"'&,;}}]+"""),
+        rf"\1\2{REDACTED}",
+    ),
+)
+
+
+def redact_secrets(text: str) -> str:
+    """``text`` with API keys, bearer tokens and ``api_key=...``-style values replaced
+    by ``[redacted]``. Applied to every provider message that can reach an error,
+    a ``HealthStatus`` or the debug log (providers sometimes echo the key back)."""
+    for pattern, repl in _SECRET_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
 
 
 class RetryableModelError(ModelError):
@@ -79,15 +112,15 @@ def parse_retry_after(headers: Mapping[str, str], *, now: float | None = None) -
 
 
 def _short(text: str) -> str:
-    text = " ".join(text.split())
+    text = redact_secrets(" ".join(text.split()))
     return text if len(text) <= _MAX_DETAIL else text[: _MAX_DETAIL - 1] + "…"
 
 
 def map_sdk_error(provider: str, err: Exception) -> ModelError:
     """Turn an ``openai``/``anthropic`` SDK exception into a platform error.
 
-    Messages keep only the HTTP status and a truncated provider message; request
-    headers (which hold the API key) are never included.
+    Messages keep only the HTTP status and a truncated, secret-redacted provider
+    message; request headers (which hold the API key) are never included.
     """
     if isinstance(err, ModelError):
         return err
