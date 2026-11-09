@@ -1,0 +1,34 @@
+{
+  "id": "chatcmpl-tool-2",
+  "object": "chat.completion",
+  "created": 1762700002,
+  "model": "gpt-4o-mini",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "tool_calls",
+      "message": {
+        "role": "assistant",
+        "content": "Opening the address bar, then typing.",
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "key", "arguments": "{\"combo\": \"ctrl+l\"}"}
+          },
+          {
+            "id": "call_2",
+            "type": "function",
+            "function": {"name": "type_text", "arguments": "{\"text\": \"example.com\\n\"}"}
+          },
+          {
+            "id": "call_3",
+            "type": "function",
+            "function": {"name": "wait", "arguments": "{\"seconds\": 2"}
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 3000, "completion_tokens": 45, "total_tokens": 3045}
+}

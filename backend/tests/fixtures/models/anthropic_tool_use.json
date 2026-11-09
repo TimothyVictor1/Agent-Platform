@@ -1,0 +1,19 @@
+{
+  "id": "msg_tool_1",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-5-5",
+  "content": [
+    {"type": "text", "text": "I'll click the search box, then type."},
+    {"type": "tool_use", "id": "toolu_01A", "name": "click", "input": {"x": 640, "y": 120}},
+    {"type": "tool_use", "id": "toolu_01B", "name": "type_text", "input": {"text": "weather"}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 1500,
+    "output_tokens": 60,
+    "cache_creation_input_tokens": 100,
+    "cache_read_input_tokens": 400
+  }
+}

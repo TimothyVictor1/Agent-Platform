@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "tool_choice 'required' is not supported",
+    "type": "invalid_request_error",
+    "code": 400
+  }
+}

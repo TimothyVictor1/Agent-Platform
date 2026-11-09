@@ -11,6 +11,7 @@ dependencies = [
     "e2b-desktop>=2.7.1",
     "fastapi>=0.156.8",
     "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "imagehash>=4.3.2",
     "jsonschema>=4.26.0",
     "openai>=3.35.1",
