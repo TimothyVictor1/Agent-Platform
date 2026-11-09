@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from referencing import Registry, Resource
 from referencing.exceptions import NoSuchResource, Unresolvable
 
+from agentplatform.contracts.board import BoardEntry
 from agentplatform.contracts.model_io import ToolSpec
 from agentplatform.contracts.task import OutputSpec, TaskResult
 from agentplatform.errors import NotFoundError
@@ -180,6 +181,14 @@ async def _request_approval(args: dict[str, Any], ctx: ToolContext) -> ToolResul
     return ToolResult(text=text)
 
 
+def _visible_to(entry: BoardEntry, agent_id: str) -> bool:
+    """Board visibility (SPEC §13.2, ``BoardService.search``): broadcast entries,
+    direct entries addressed to the agent, and the agent's own entries."""
+    if entry.to is None or agent_id in entry.to:
+        return True
+    return entry.author.type == "agent" and entry.author.id == agent_id
+
+
 async def _wait_for(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if ctx.board is None:
         return error_result("the board is not available in this session")
@@ -189,7 +198,12 @@ async def _wait_for(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         question = await ctx.board.get(entry_id)
     except NotFoundError:
         question = None
-    if question is None or question.session_id != ctx.session_id:
+    if (
+        question is None
+        or question.session_id != ctx.session_id
+        or not _visible_to(question, ctx.agent.id)
+    ):
+        # Same message for missing and hidden entries: do not reveal that it exists.
         return error_result(f"no board entry {entry_id!r}")
     if question.kind != "question":
         return error_result(f"entry {entry_id!r} is a {question.kind}, not a question")
@@ -198,6 +212,10 @@ async def _wait_for(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         answer = await ctx.hooks.wait_or_stop(ctx.board.wait_for_answer(entry_id, timeout_s))
     finally:
         await ctx.hooks.set_status("working")
+    if answer is not None and (
+        answer.session_id != ctx.session_id or not _visible_to(answer, ctx.agent.id)
+    ):
+        answer = None  # answered privately to someone else: treat as no answer for us
     if answer is None:
         return ToolResult(
             text=f"no answer within {timeout_s:g} s; continue with your best judgement"

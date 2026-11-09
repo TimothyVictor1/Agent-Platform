@@ -496,6 +496,53 @@ async def test_wait_for_rejects_other_sessions_and_kinds(
     assert board.waits == []
 
 
+async def test_wait_for_hides_questions_not_visible_to_caller(
+    registry: ToolRegistry, make_ctx: Any
+) -> None:
+    """T06 review #5: direct questions between other agents stay private."""
+    private_q = make_board_entry(
+        "question", title="secret", author=Actor.agent("a-2", "Brook"), to=["a-3"]
+    )
+    board = FakeBoard([private_q], make_board_entry("answer", title="secret answer"))
+    res = await run(registry, make_ctx(board=board), "wait_for", entry_id=private_q.id)
+    assert res.is_error
+    assert "no board entry" in res.text
+    assert "secret" not in res.text
+    assert board.waits == []
+
+
+async def test_wait_for_hides_answers_not_visible_to_caller(
+    registry: ToolRegistry, make_ctx: Any
+) -> None:
+    q = make_board_entry("question", title="Which currency?")  # broadcast
+    private_a = make_board_entry(
+        "answer", seq=2, title="Use SEK", body="secret", author=Actor.agent("a-2", "Brook"),
+        to=["a-3"],
+    )  # fmt: skip
+    board = FakeBoard([q], private_a)
+    res = await run(registry, make_ctx(board=board), "wait_for", entry_id=q.id)
+    assert not res.is_error
+    assert "no answer" in res.text
+    assert "SEK" not in res.text
+    assert "secret" not in res.text
+
+
+async def test_wait_for_sees_own_and_addressed_entries(
+    registry: ToolRegistry, make_ctx: Any
+) -> None:
+    ctx = make_ctx()
+    me = ctx.agent
+    own_q = make_board_entry(
+        "question", title="mine", author=Actor.agent(me.id, me.name), to=["a-2"]
+    )
+    direct_a = make_board_entry(
+        "answer", seq=2, title="for you", author=Actor.agent("a-2", "Brook"), to=[me.id]
+    )
+    ctx.board = FakeBoard([own_q], direct_a)
+    res = await run(registry, ctx, "wait_for", entry_id=own_q.id)
+    assert "for you" in res.text
+
+
 async def test_wait_for_without_board(registry: ToolRegistry, make_ctx: Any) -> None:
     res = await run(registry, make_ctx(), "wait_for", entry_id="x")
     assert res.is_error
