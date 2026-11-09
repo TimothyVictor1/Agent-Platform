@@ -172,13 +172,14 @@ def test_screen_size_drives_the_result_not_the_screenshot_size() -> None:
 
 def test_result_is_always_int_inside_the_screen() -> None:
     obs = obs_for(HD, 1280)
-    for mode, points in (
+    cases: list[tuple[CoordinateMode, list[tuple[float, float]]]] = [
         ("absolute", [(0, 0), (1279.9, 719.9), (2560, 1440), (-4.9, -4.9)]),
         ("normalized_1000", [(999.999, 0.001), (2000, 2000)]),
         ("relative", [(0.99999, 0.00001), (2, 2)]),
-    ):
+    ]
+    for mode, points in cases:
         for x, y in points:
-            sx, sy = to_sandbox_coords(x, y, mode, obs, HD)  # type: ignore[arg-type]
+            sx, sy = to_sandbox_coords(x, y, mode, obs, HD)
             assert isinstance(sx, int)
             assert isinstance(sy, int)
             assert 0 <= sx < HD[0]
