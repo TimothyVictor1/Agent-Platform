@@ -100,8 +100,6 @@ BAD_REGIONS: list[tuple[CoordinateMode, Any, Any, Any, Any, str]] = [
     ("absolute", 100, 100, math.nan, 10, "w must be a finite number"),
     ("absolute", 100, 100, 10, None, "h must be a number"),
     ("absolute", None, 100, 10, 10, "x must be a number"),
-    ("absolute", 1280, 0, 100, 100, "empty or outside the screen"),
-    ("absolute", 0, 900, 100, 100, "empty or outside the screen"),
     ("absolute", 2500, 0, 200, 10, r"x \+ w=2700"),
     ("normalized_1000", 0, 1900, 10, 200, r"y \+ h=2100"),
     ("relative", 0, 0, 3, 0.5, "did you give pixels"),
@@ -116,6 +114,53 @@ def test_bad_regions_raise(
     obs = prepare_observation(png, 1280)
     with pytest.raises(CoordinateError, match=message):
         crop_region(png, x, y, w, h, mode, obs, SMALL)
+
+
+EDGE_REGIONS: list[
+    tuple[str, int, CoordinateMode, tuple[float, float, float, float], tuple[int, int]]
+] = [
+    # A region starting exactly on the right/bottom edge is the last pixel column/row
+    # (1 px, enlarged 4x), not an error (T03 review). Screen 1280x800.
+    ("absolute right", 1280, "absolute", (1280, 0, 100, 100), (4, 400)),
+    ("absolute bottom", 1280, "absolute", (0, 800, 100, 100), (400, 4)),
+    ("absolute corner", 1280, "absolute", (1280, 800, 10, 10), (4, 4)),
+    ("absolute resized right", 1024, "absolute", (1024, 0, 80, 80), (4, 400)),
+    ("absolute resized bottom", 1024, "absolute", (0, 640, 80, 80), (400, 4)),
+    ("normalized right", 1280, "normalized_1000", (1000, 0, 50, 50), (4, 160)),
+    ("normalized bottom", 1280, "normalized_1000", (0, 1000, 50, 50), (256, 4)),
+    ("normalized corner", 1280, "normalized_1000", (1000, 1000, 50, 50), (4, 4)),
+    ("relative right", 1280, "relative", (1.0, 0, 0.1, 0.1), (4, 320)),
+    ("relative bottom", 1280, "relative", (0, 1.0, 0.1, 0.1), (512, 4)),
+    ("relative corner", 1280, "relative", (1.0, 1.0, 0.1, 0.1), (4, 4)),
+    # a tiny region inside the screen still yields at least one pixel
+    ("relative sub-pixel", 1280, "relative", (0.5, 0.5, 0.0001, 0.0001), (4, 4)),
+]
+
+
+@pytest.mark.parametrize(
+    ("target", "mode", "region", "size"),
+    [case[1:] for case in EDGE_REGIONS],
+    ids=[case[0] for case in EDGE_REGIONS],
+)
+def test_region_on_the_right_or_bottom_edge_is_one_pixel_not_an_error(
+    target: int,
+    mode: CoordinateMode,
+    region: tuple[float, float, float, float],
+    size: tuple[int, int],
+) -> None:
+    assert zoom_size(SMALL, target, mode, region) == size  # was CoordinateError
+
+
+def test_edge_region_takes_the_last_column() -> None:
+    png = png_for(SMALL)
+    obs = prepare_observation(png, 1280)
+    jpeg = crop_region(png, 1280, 0, 100, 100, "absolute", obs, SMALL)
+    with Image.open(io.BytesIO(png)) as src, Image.open(io.BytesIO(jpeg)) as out:
+        expected = src.convert("RGB").getpixel((1279, 50))
+        got = out.convert("RGB").getpixel((2, 200))
+    assert isinstance(expected, tuple)
+    assert isinstance(got, tuple)
+    assert all(abs(a - b) <= 40 for a, b in zip(expected, got, strict=True))  # JPEG noise
 
 
 def test_invalid_png_is_a_sandbox_error() -> None:
