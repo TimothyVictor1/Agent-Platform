@@ -43,15 +43,22 @@ def dump_arguments(call: ToolCall) -> str:
 
 
 def parse_arguments(raw: Any) -> dict[str, Any]:
-    """Tool-call arguments as a dict; invalid JSON becomes ``{"_raw": text}``."""
+    """Tool-call arguments as a dict; invalid (or too deeply nested) JSON becomes
+    ``{"_raw": text}``."""
     if isinstance(raw, dict):
         return {str(k): v for k, v in raw.items()}
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return {}
-    text = raw if isinstance(raw, str) else json.dumps(raw)
+    if isinstance(raw, str):
+        text = raw
+    else:
+        try:
+            text = json.dumps(raw)
+        except (TypeError, ValueError, RecursionError):
+            return {"_raw": f"<unserializable {type(raw).__name__}>"}
     try:
         parsed = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return {"_raw": text}
     if isinstance(parsed, dict):
         return {str(k): v for k, v in parsed.items()}
