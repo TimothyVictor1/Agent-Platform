@@ -1,14 +1,16 @@
 """Fixtures for Postgres-backed tests (marker ``infra``; needs ``make db-up``).
 
-A throwaway database ``<APP_DB_NAME>_itest`` is recreated and migrated with Alembic
-once per test run, so tests never touch a worktree's real data. Tests isolate
-themselves by using fresh session ids, not by truncating tables.
+A throwaway database ``<APP_DB_NAME prefix>_itest_<run id>`` is created and
+migrated with Alembic once per test run and dropped at the end of the run, so
+tests never touch a worktree's real data. Only the database this run created is
+ever dropped (see ``testdb.py``). Tests isolate themselves by using fresh session
+ids, not by truncating tables.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -26,32 +28,39 @@ from agentplatform.db.event_store import PostgresEventStore
 from agentplatform.db.session import SessionMaker, create_engine, create_sessionmaker
 from agentplatform.testing.builders import make_session
 
+from .testdb import create_database_sql, drop_database_sql, itest_database_name, new_run_id
+
 BACKEND = Path(__file__).resolve().parents[3]
 
 
-async def _recreate_database(admin_url: str, name: str) -> None:
+async def _admin_execute(admin_url: str, sql: str) -> None:
     engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
     try:
         async with engine.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-            await conn.execute(text(f'CREATE DATABASE "{name}"'))
+            await conn.execute(text(sql))
     finally:
         await engine.dispose()
 
 
 @pytest.fixture(scope="session")
-def database_url() -> str:
-    """URL of a freshly migrated test database (created once per run)."""
+def database_url() -> Iterator[str]:
+    """URL of a freshly migrated test database (created once per run, dropped after)."""
     base = make_url(load_settings().effective_database_url)
-    name = f"{base.database or 'agentplatform'}_itest"[:63]
+    source = base.database or ""
+    name = itest_database_name(source, new_run_id())
+    assert name != source, "test database name must differ from the source database"
     admin = base.set(database="postgres").render_as_string(hide_password=False)
-    asyncio.run(_recreate_database(admin, name))
-    url = base.set(database=name).render_as_string(hide_password=False)
-    cfg = Config(str(BACKEND / "alembic.ini"))
-    cfg.set_main_option("script_location", str(BACKEND / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
-    command.upgrade(cfg, "head")
-    return url
+    asyncio.run(_admin_execute(admin, create_database_sql(name)))
+    created = name  # only now is this database ours to drop
+    try:
+        url = base.set(database=name).render_as_string(hide_password=False)
+        cfg = Config(str(BACKEND / "alembic.ini"))
+        cfg.set_main_option("script_location", str(BACKEND / "alembic"))
+        cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+        command.upgrade(cfg, "head")
+        yield url
+    finally:
+        asyncio.run(_admin_execute(admin, drop_database_sql(name, source=source, created=created)))
 
 
 @pytest.fixture
