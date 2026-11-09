@@ -10,6 +10,9 @@ export function schemaError(schema: unknown): string | null {
   for (const [key, value] of Object.entries(schema)) {
     if (key === "type" && !(typeof value === "string" ? types.includes(value) : Array.isArray(value) && value.length > 0 && new Set(value).size === value.length && value.every(v => typeof v === "string" && types.includes(v)))) return "Schema type must name a JSON type (or a unique nonempty list of types).";
     if (["$id", "$schema", "$ref", "$anchor", "$dynamicRef", "$dynamicAnchor", "$comment", "title", "description", "format", "contentEncoding", "contentMediaType", "pattern"].includes(key) && typeof value !== "string") return `${key} must be a string.`;
+    if (["$anchor", "$dynamicAnchor", "$recursiveAnchor"].includes(key) && (typeof value !== "string" || !/^[A-Za-z_][-A-Za-z0-9._]*$/.test(value))) return `${key} must be a valid schema anchor.`;
+    if (key === "$recursiveRef" && typeof value !== "string") return "$recursiveRef must be a string.";
+    if (key === "$id" && typeof value === "string" && !/^[^#]*#?$/.test(value)) return "$id cannot contain a nonempty fragment.";
     if (["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"].includes(key) && (typeof value !== "number" || !Number.isFinite(value) || (key === "multipleOf" && value <= 0))) return `${key} must be ${key === "multipleOf" ? "a positive" : "a finite"} number.`;
     if (["minLength", "maxLength", "minItems", "maxItems", "minContains", "maxContains", "minProperties", "maxProperties"].includes(key) && (typeof value !== "number" || !Number.isInteger(value) || value < 0)) return `${key} must be a nonnegative integer.`;
     if (["uniqueItems", "readOnly", "writeOnly", "deprecated"].includes(key) && typeof value !== "boolean") return `${key} must be a boolean.`;
@@ -29,6 +32,13 @@ export function schemaError(schema: unknown): string | null {
     }
     if (key === "dependentRequired") {
       if (!object(value) || Object.values(value).some(v => !Array.isArray(v) || v.some(s => typeof s !== "string") || new Set(v).size !== v.length)) return "dependentRequired must contain unique lists of strings.";
+    }
+    if (key === "dependencies") {
+      if (!object(value)) return "dependencies must be an object.";
+      for (const child of Object.values(value)) {
+        if (Array.isArray(child)) { if (child.some(v => typeof v !== "string") || new Set(child).size !== child.length) return "dependencies arrays must contain unique strings."; }
+        else { const error = schemaError(child); if (error) return `dependencies: ${error}`; }
+      }
     }
     if (key === "$vocabulary" && (!object(value) || Object.values(value).some(v => typeof v !== "boolean"))) return "$vocabulary must contain booleans.";
   }

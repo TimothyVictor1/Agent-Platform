@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import dagre from "@dagrejs/dagre";
 import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps, type XYPosition } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -24,6 +24,14 @@ function TaskCard({ data, selected }: NodeProps<TaskNode>) {
   </div>;
 }
 const nodeTypes = { task: TaskCard };
+
+function subscribeTheme(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  return () => observer.disconnect();
+}
+const currentTheme = () => document.documentElement.classList.contains("dark") ? "dark" : "light";
+const serverTheme = () => "dark" as const;
 
 export function graphElements(tasks: TaskDraft[], errors: (PlanError | ProblemError)[], selection: Selection, statuses: Record<string, Task["status"]> = {}) {
   const graph = new dagre.graphlib.Graph().setGraph({ rankdir: "LR", ranksep: 90, nodesep: 40 }).setDefaultEdgeLabel(() => ({}));
@@ -49,8 +57,9 @@ export function PlanGraph({ tasks, errors, selection, statuses, onSelect, onConn
 }) {
   const { nodes, edges } = useMemo(() => graphElements(tasks, errors, selection, statuses), [tasks, errors, selection, statuses]);
   const [positions, setPositions] = useState<Record<string, XYPosition>>({});
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, serverTheme);
   return <div aria-label="Plan dependency graph" className="h-[620px] min-w-0 overflow-hidden rounded-xl border bg-muted/20">
-    <ReactFlow nodes={nodes.map(node => ({ ...node, position: positions[node.id] ?? node.position }))} edges={edges} nodeTypes={nodeTypes} fitView colorMode="system" minZoom={0.2} maxZoom={1.6} deleteKeyCode={null} multiSelectionKeyCode={null}
+    <ReactFlow nodes={nodes.map(node => ({ ...node, position: positions[node.id] ?? node.position }))} edges={edges} nodeTypes={nodeTypes} fitView colorMode={theme} minZoom={0.2} maxZoom={1.6} deleteKeyCode={null} multiSelectionKeyCode={null}
       onNodeClick={(_, node) => onSelect({ type: "node", key: node.id })} onEdgeClick={(_, edge) => onSelect({ type: "edge", source: edge.source, target: edge.target })} onPaneClick={() => onSelect(null)}
       onNodesChange={changes => { for (const change of changes) {
         if (change.type === "select" && change.selected) onSelect({ type: "node", key: change.id });
