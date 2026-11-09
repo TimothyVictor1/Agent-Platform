@@ -317,6 +317,42 @@ async def test_poison_queue_entry_is_dropped(bus: RedisEventBus, redis: Redis) -
     assert await bus.pending_count(queue) == 0
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "null",
+        "[]",
+        "[1, 2]",
+        "1",
+        '"text"',
+        "{}",
+        '{"kind": "command"}',
+        '{"data": {}}',
+        '{"kind": "command", "data": null}',
+        '{"kind": "command", "data": {"type": "plan_session"}}',
+        '{"kind": ["x"], "data": {}}',
+        "{not json",
+    ],
+)
+async def test_malformed_queue_envelopes_are_dropped(
+    bus: RedisEventBus, redis: Redis, raw: str
+) -> None:
+    """T04 review #9: valid JSON that is not an envelope must not wedge the queue."""
+    queue = agent_queue(new_id())
+    await bus.enqueue(queue, command(new_id()))  # creates the group
+    first = await bus.dequeue(queue, "a", timeout_s=1)
+    assert first is not None
+    await bus.ack(first)
+    await redis.xadd(bus.queue_key(queue), {"d": raw})
+    cmd = command(new_id())
+    await bus.enqueue(queue, cmd)
+    delivery = await bus.dequeue(queue, "a", timeout_s=1)
+    assert delivery is not None
+    assert delivery.item == cmd
+    await bus.ack(delivery)
+    assert await bus.pending_count(queue) == 0
+
+
 async def test_from_url_owns_and_closes_client(prefix: str) -> None:
     bus = RedisEventBus.from_url(load_settings().effective_redis_url, prefix=prefix)
     await bus.publish(event(new_id(), 1))

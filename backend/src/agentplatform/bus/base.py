@@ -74,13 +74,18 @@ def encode_queue_item(item: QueueItem) -> str:
 
 
 def decode_queue_item(text: str | bytes) -> QueueItem:
-    """Inverse of ``encode_queue_item``."""
+    """Inverse of ``encode_queue_item``. Raises ``ValueError`` (``json`` and pydantic
+    errors included) for anything that is not a valid envelope, so callers can
+    drop poison entries with one ``except ValueError``."""
     raw = json.loads(text)
-    if raw["kind"] == "command":
+    if not isinstance(raw, dict) or set(raw) != {"kind", "data"}:
+        raise ValueError("queue item is not a {kind, data} envelope")
+    kind = raw["kind"]
+    if kind == "command":
         return COMMAND_ADAPTER.validate_python(raw["data"])
-    if raw["kind"] == "event":
+    if kind == "event":
         return EVENT_ADAPTER.validate_python(raw["data"])
-    raise ValueError(f"unknown queue item kind {raw['kind']!r}")
+    raise ValueError(f"unknown queue item kind {str(kind)[:40]!r}")
 
 
 @dataclass(frozen=True, slots=True)

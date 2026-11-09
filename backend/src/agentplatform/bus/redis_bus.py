@@ -249,7 +249,7 @@ class RedisEventBus:
     ) -> Delivery | None:
         try:
             item = decode_queue_item(fields["d"])
-        except (KeyError, ValueError, ValidationError):
+        except (KeyError, TypeError, ValueError, ValidationError):
             log.warning("queue_item_undecodable_dropped", queue=queue, entry_id=entry_id)
             await self._drop(key, entry_id)
             return None
