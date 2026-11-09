@@ -19,7 +19,8 @@ are folded into the "progress so far" paragraph (max 800 chars) by a
 ``Summarizer``. Before returning, the builder measures the prompt (4 chars ≈ 1
 token, ``image_tokens`` per image) and trims to ``prompt_budget_tokens``: oldest
 images first, then oldest full steps (they become compact lines), then compact
-lines, then the digest.
+lines, then the digest. ``digest_included`` tells the loop whether the digest
+survived whole; only then may the digest cursor advance.
 """
 
 from __future__ import annotations
@@ -313,6 +314,10 @@ class ContextBuilder:
         self.summary = ""
         self.summarized_through = 0
         self.last_trim: dict[str, Any] = {}
+        self.digest_included = True
+        """Whether the last ``build`` showed the whole digest. When trimming cut it,
+        the caller must not advance its digest cursor, or the entries that were
+        cut would never be shown (they reappear in the next step's digest)."""
 
     # -- system message -------------------------------------------------------------
 
@@ -402,6 +407,7 @@ class ContextBuilder:
                 break
         if tokens > s.prompt_budget_tokens:
             log.warning("context_over_budget", tokens=tokens, budget=s.prompt_budget_tokens)
+        self.digest_included = trim.digest == digest
         self.last_trim = {
             "tokens": tokens,
             "images": trim.images,

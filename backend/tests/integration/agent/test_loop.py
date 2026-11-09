@@ -875,6 +875,35 @@ class FakeDigest:
         return Digest("", cursor=since)
 
 
+class OversizedFirstDigest:
+    """Entries #1-#5: the first digest is too big for the prompt budget (it gets
+    trimmed); later digests from the same cursor fit."""
+
+    def __init__(self) -> None:
+        self.since: list[int] = []
+
+    async def build(self, agent: Agent, task: Task, *, since: int, budget_tokens: int) -> Digest:
+        self.since.append(since)
+        if since >= 5:
+            return Digest("", cursor=since)
+        if len(self.since) == 1:
+            return Digest("[#1 fact] " + "x" * 400_000 + " END-OF-DIGEST", cursor=5)
+        return Digest("[#1 fact] compact END-OF-DIGEST", cursor=5)
+
+
+async def test_trimmed_digest_does_not_advance_cursor(harness: Any) -> None:
+    """T06 review #6: entries cut from the digest reappear in the next step."""
+    digest = OversizedFirstDigest()
+    h = harness([click(1), click(2), give_up()], digest=digest)
+    await h.run()
+    first = last_user_text(h.model.calls[0].request)
+    second = last_user_text(h.model.calls[1].request)
+    assert "END-OF-DIGEST" not in first
+    assert digest.since[:2] == [0, 0]
+    assert "[#1 fact] compact END-OF-DIGEST" in second
+    assert digest.since[2] == 5
+
+
 async def test_digest_in_user_message_and_cursor_moves(harness: Any) -> None:
     digest = FakeDigest()
     h = harness([click(1), click(2), give_up()], digest=digest)

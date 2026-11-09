@@ -300,6 +300,15 @@ def test_budget_drops_digest_last() -> None:
     assert msgs[-1].images() == [IMG]
 
 
+@pytest.mark.parametrize(
+    ("digest", "included"), [("short digest", True), ("d" * 4000, False), ("", True)]
+)
+def test_digest_included_flag(digest: str, included: bool) -> None:
+    b = builder(settings=ContextSettings(prompt_budget_tokens=1000, image_tokens=500))
+    b.build(header="now", image=IMG, digest=digest)
+    assert b.digest_included is included
+
+
 # -- helpers -----------------------------------------------------------------------------
 
 

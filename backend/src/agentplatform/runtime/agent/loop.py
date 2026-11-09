@@ -995,7 +995,10 @@ class AgentRuntime:
             )
         )
         run.last_phash = obs.phash
-        self.state.digest_cursor = max(self.state.digest_cursor, digest.cursor)
+        if run.builder.digest_included:
+            # Only advance past entries the model actually saw; a digest cut by
+            # trimming is rebuilt from the old cursor next step.
+            self.state.digest_cursor = max(self.state.digest_cursor, digest.cursor)
         if task_outcome is None:
             await run.builder.maybe_summarize(step)
         return task_outcome
