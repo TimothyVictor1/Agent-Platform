@@ -263,8 +263,12 @@ def _xy(args: list[Any], kwargs: dict[str, Any]) -> tuple[Any, Any] | None:
 
 
 def _pg_click(
-    button: str | None = None, count: int | None = None
+    button: str | None = None, count: int | None = None, *, positional_clicks: bool = False
 ) -> Callable[[list[Any], dict[str, Any]], tuple[str, dict[str, Any]] | None]:
+    """``positional_clicks``: the third positional argument is the click count, as in
+    ``pyautogui.click(x, y, clicks, interval, button)``. (For ``doubleClick`` and
+    friends the third argument is the interval.)"""
+
     def build(args: list[Any], kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
         xy = _xy(args, kwargs)
         if xy is None:
@@ -274,6 +278,8 @@ def _pg_click(
         if isinstance(btn, str) and btn != "left":
             out["button"] = btn
         n = count or kwargs.get("clicks") or kwargs.get("count")
+        if n is None and positional_clicks and len(args) > 2:
+            n = args[2]
         if _is_num(n) and int(n) > 1:
             out["count"] = int(n)
         return "click", out
@@ -331,7 +337,7 @@ def _pg_drag(args: list[Any], kwargs: dict[str, Any]) -> tuple[str, dict[str, An
 
 
 _PYAUTOGUI: dict[str, Callable[[list[Any], dict[str, Any]], tuple[str, dict[str, Any]] | None]] = {
-    "click": _pg_click(),
+    "click": _pg_click(positional_clicks=True),
     "leftClick": _pg_click("left"),
     "rightClick": _pg_click("right"),
     "middleClick": _pg_click("middle"),

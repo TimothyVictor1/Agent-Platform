@@ -366,3 +366,20 @@ def test_tuples_become_lists_and_parsed_arguments_are_strict_json() -> None:
 def test_json_inside_a_python_call_is_not_a_second_call(text: str, expected: list[Call]) -> None:
     calls = parse_text_tool_calls(text, TOOLS)
     assert [(c.name, c.arguments) for c in calls] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("pyautogui.click(100, 200, 2)", [("click", {"x": 100, "y": 200, "count": 2})]),
+        ("pyautogui.click(100, 200, 3, 0.1)", [("click", {"x": 100, "y": 200, "count": 3})]),
+        ("pyautogui.click(100, 200, 1)", [("click", {"x": 100, "y": 200})]),
+        ("pyautogui.click(100, 200, clicks=2)", [("click", {"x": 100, "y": 200, "count": 2})]),
+        # doubleClick(x, y, interval, ...): the third argument is not a click count
+        ("pyautogui.doubleClick(100, 200, 5)", [("click", {"x": 100, "y": 200, "count": 2})]),
+        ("pyautogui.rightClick(100, 200, 5)", [("click", {"x": 100, "y": 200, "button": "right"})]),
+    ],
+)
+def test_pyautogui_click_third_positional_is_clicks(text: str, expected: list[Call]) -> None:
+    calls = parse_text_tool_calls(text, TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == expected
