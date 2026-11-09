@@ -26,6 +26,32 @@ beforeEach(() => { localStorage.clear(); push.mockClear(); });
 afterEach(() => vi.restoreAllMocks());
 
 describe("Plan review", () => {
+  it.each(["metaKey", "ctrlKey"])("refines instead of approving on %s+Enter in the refine box", async modifier => {
+    const refine = vi.spyOn(api, "refine"); const approve = vi.spyOn(api, "approve"); await ready();
+    const input = screen.getByLabelText("Refine with the planner");
+    fireEvent.change(input, { target: { value: "Fewer tasks" } });
+    fireEvent.keyDown(input, { key: "Enter", [modifier]: true });
+    await screen.findByRole("region", { name: "Refinement diff" });
+    expect(refine).toHaveBeenCalledTimes(1); expect(approve).not.toHaveBeenCalled();
+  });
+  it("does not approve from task fields or a deletion dialog", async () => {
+    const approve = vi.spyOn(api, "approve"); await ready(); await select();
+    for (const label of ["Title", "Goal", "Output 1 kind"]) fireEvent.keyDown(screen.getByLabelText(label), { key: "Enter", metaKey: true });
+    await userEvent.click(screen.getByRole("button", { name: "Delete task" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel deletion" }), { key: "Enter", ctrlKey: true });
+    expect(approve).not.toHaveBeenCalled();
+  });
+  it("uses Backspace to remove selection while ignoring it inside fields", async () => {
+    await ready(); await select();
+    fireEvent.keyDown(screen.getByLabelText("Title"), { key: "Backspace" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(screen.getByRole("alertdialog")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel deletion" }));
+    await userEvent.click(screen.getByRole("button", { name: "Select T1 to T3 edge" }));
+    fireEvent.keyDown(window, { key: "Backspace" });
+    await select("T3"); expect(screen.getByLabelText("Dependencies (select multiple)")).toHaveValue(["T2"]);
+  });
   it("loads planner context and approves the current version before navigating", async () => {
     const approve = vi.spyOn(api, "approve"); await ready();
     expect(screen.getByText("Public sources are sufficient.")).toBeVisible();
