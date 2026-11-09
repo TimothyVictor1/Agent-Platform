@@ -18,7 +18,16 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import Response as FileRespResponse
 from starlette.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, model_validator

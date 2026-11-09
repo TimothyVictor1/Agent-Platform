@@ -147,9 +147,11 @@ def test_command_timeout_kills_group(sandbox: SimpleNamespace) -> None:
     assert out["timed_out"] is True
     assert out["exit_code"] != 0
     assert elapsed < 10, "timeout must not wait for the full sleep"
-    # Background children in the same group must be gone.
+    # Background children in the same group must be gone. (-fx: exact full
+    # cmdline match, so the bash -lc wrapper running this pgrep does not
+    # match its own argument text.)
     left = str(
-        sandbox.client.command("pgrep -f 'sleep 30' >/dev/null && echo alive || true")["stdout"]
+        sandbox.client.command("pgrep -fx 'sleep 30' >/dev/null && echo alive || true")["stdout"]
     ).strip()
     assert left != "alive", "stray processes survived the timeout"
 
