@@ -15,6 +15,7 @@ Every endpoint requires ``Authorization: Bearer <CONTROL_TOKEN>``.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response
