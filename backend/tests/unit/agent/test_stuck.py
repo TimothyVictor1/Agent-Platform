@@ -37,6 +37,11 @@ def feed(
     )
 
 
+def episode(det: StuckDetector) -> str | None:
+    """Read the property through a call so mypy does not narrow it across steps."""
+    return det.episode
+
+
 def test_phash_distance() -> None:
     assert phash_distance(SAME, SAME) == 0
     assert phash_distance("0000000000000000", "0000000000000003") == 2
@@ -74,8 +79,7 @@ def test_repetition_within_tolerance() -> None:
     det = StuckDetector()
     hashes = [SAME, OTHER]
     results = [
-        feed(det, step, phash=hashes[step % 2], x=500 + step, y=300 - step)
-        for step in range(1, 5)
+        feed(det, step, phash=hashes[step % 2], x=500 + step, y=300 - step) for step in range(1, 5)
     ]
     assert results[:3] == [None, None, None]
     assert results[3] is not None
@@ -136,11 +140,11 @@ def test_one_signal_per_episode_and_reset_after_progress() -> None:
     for step in range(1, 7):
         feed(det, step)
     assert feed(det, 7) is not None
-    assert det.episode == "screen_unchanged"
+    assert episode(det) == "screen_unchanged"
     for step in range(8, 20):
         assert feed(det, step) is None  # still stuck, not reported again
     assert feed(det, 20, phash=OTHER) is None  # screen changed -> episode closed
-    assert det.episode is None
+    assert episode(det) is None
     for step in range(21, 26):
         assert feed(det, step, phash=OTHER) is None
     again = feed(det, 26, phash=OTHER)
@@ -155,5 +159,5 @@ def test_report_no_tool_respects_episode() -> None:
     assert first.reason == "no_tool"
     assert det.report_no_tool() is None
     feed(det, 1, progress=True)
-    assert det.episode is None
+    assert episode(det) is None
     assert det.report_no_tool() is not None
