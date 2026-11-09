@@ -11,11 +11,21 @@ client per profile role. From the outside in, the stack is:
 
 | Layer | What it does |
 | --- | --- |
-| `DebugLoggingClient` (optional) | Appends one JSONL record per call to `data/model-debug/<client>-<date>.jsonl`. Images are replaced by `{sha256, bytes}`. API keys never reach this layer. |
+| `DebugLoggingClient` (opt-in, off by default) | Only added when `build_client(..., debug_dir=...)` is given. Appends one JSONL record per call to `<debug_dir>/<client>-<date>.jsonl`. Images are replaced by `{sha256, bytes}`, secrets in error messages are redacted, and API keys never reach this layer. |
 | `AccountingClient` | Fills `usage.images` and `usage.cost_usd` from the `prices` table (tokens per 1M, `image` per image; a missing model costs 0). |
 | `RetryingClient` | Up to 4 attempts. Uses exponential back-off with full jitter and honours `Retry-After`. Retries 408/409/429/5xx, timeouts and connection errors. `req.timeout_s` bounds the whole call, retries included. |
 | `ConcurrencyLimitedClient` | A semaphore shared by every client for the same server: per `base_url` for OpenAI-compatible, per model for Anthropic. The size comes from the role's `concurrency`; if two roles on one server disagree, the first one built wins and a warning is logged. |
 | Provider client | `OpenAICompatibleClient` or `AnthropicClient`. SDK retries are off. |
+
+**Debug logs contain prompts.** A record holds the full request (system prompt, task
+text, board digests, typed text, tool arguments) and the full response. That can include
+personal data or credentials that a user or a web page put into the conversation. Logging
+is therefore opt-in: `build_client` adds `DebugLoggingClient` only when `debug_dir` is
+passed (the conventional location is `data/model-debug/`, `DEFAULT_DEBUG_DIR`). Enable it
+only while debugging, keep the directory out of backups and shared bundles, and delete
+the files afterwards. Payloads that cannot be dumped are logged as
+`{"unloggable": <error type>}`. Nesting deeper than 64 levels is cut off as
+`"<max-depth>"`. Logging never fails the model call.
 
 The semaphore sits inside the retry loop. A request sleeping out a back-off therefore does not
 hold a slot another agent could use.
