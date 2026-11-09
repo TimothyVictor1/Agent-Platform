@@ -130,7 +130,10 @@ MAX_SCREEN = 3840
 _JSON_BODY_CAP = 1_000_000
 _SCREENSHOT_CAP = 64_000_000
 _ERROR_DETAIL_CHARS = 500
-_ACTION_TIMEOUT_S = 15.0
+# Input actions: longer than the control server's own 30 s xdotool timeout, so its
+# error (not a client timeout) reaches the caller and no action is left running.
+_ACTION_TIMEOUT_S = 35.0
+_DRAG_TIMEOUT_S = 60.0
 _DEFAULT_TIMEOUT_S = 30.0
 _FILE_TIMEOUT_S = 120.0
 _COMMAND_GRACE_S = 15.0  # server kill grace + drain + collect, plus HTTP slack
@@ -261,7 +264,9 @@ class DockerLocalProvider:
         http_transport: httpx.AsyncBaseTransport | None = None,
         poll_interval_s: float = 0.5,
     ) -> None:
-        self._tokens: ControlTokenStore = token_store or InMemoryControlTokenStore()
+        self._tokens: ControlTokenStore = (
+            token_store if token_store is not None else InMemoryControlTokenStore()
+        )
         self._image = image
         self._worktree = worktree_label(worktree or "")
         self._network = network
@@ -853,7 +858,7 @@ class DockerLocalHandle:
             "POST",
             "/drag",
             idempotent=False,
-            timeout_s=_DEFAULT_TIMEOUT_S,
+            timeout_s=_DRAG_TIMEOUT_S,
             json={"x1": x1, "y1": y1, "x2": x2, "y2": y2},
         )
 
