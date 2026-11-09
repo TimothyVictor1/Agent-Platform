@@ -1,0 +1,8 @@
+body { font: 18px system-ui; max-width: 850px; margin: 3rem auto; padding: 1rem; color: #172033; }
+a { color: #134bb0; } table { border-collapse: collapse; }
+td, th { border: 1px solid #788395; padding: .8rem; }
+label, button, input { font: inherit; margin: .5rem; }
+.yearly { display: none; } #yearly:checked ~ .monthly { display: none; }
+#yearly:checked ~ .yearly { display: table; }
+.cookie { position: fixed; inset: auto 0 0; padding: 2rem; background: #eee; }
+#cookies:checked ~ .cookie { display: none; }

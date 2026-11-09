@@ -1,0 +1,15 @@
+services:
+  fixtures:
+    image: nginx:1.28-alpine
+    ports:
+      - "127.0.0.1:8090:80"
+    volumes:
+      - ./site:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      sandbox:
+        aliases: [eval-fixtures]
+networks:
+  sandbox:
+    external: true
+    name: ${EVAL_SANDBOX_NETWORK:-agentplatform_default}
