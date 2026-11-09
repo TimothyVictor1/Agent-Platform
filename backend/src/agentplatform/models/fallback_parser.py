@@ -35,7 +35,13 @@ from typing import Any, TypeGuard
 
 from agentplatform.contracts.model_io import ToolCall
 
-__all__ = ["MAX_CALLS", "MAX_TEXT_CHARS", "SCREEN_CENTRE", "parse_text_tool_calls"]
+__all__ = [
+    "MAX_CALLS",
+    "MAX_JSON_DEPTH",
+    "MAX_TEXT_CHARS",
+    "SCREEN_CENTRE",
+    "parse_text_tool_calls",
+]
 
 MAX_TEXT_CHARS = 20_000
 """Longer text is truncated before parsing (bounds the work on hostile input)."""
@@ -46,6 +52,9 @@ MAX_CALL_CHARS = 4_000
 """A Python-style call longer than this is not an action (type_text allows 2000)."""
 MAX_CANDIDATES = 256
 """At most this many ``{`` / ``name(`` positions are tried, bounding hostile input."""
+MAX_JSON_DEPTH = 32
+"""Deeper ``function`` / ``tool_calls`` nesting, or deeper argument values, is not an
+action; the call is dropped (bounds recursion on hostile input)."""
 
 _NAME_KEYS = ("tool", "name", "action", "tool_name", "function")
 _ARG_KEYS = ("args", "arguments", "parameters", "input", "params")
@@ -90,7 +99,7 @@ def _json_spans(text: str) -> list[tuple[int, int, Any]]:
         tries += 1
         try:
             value, end = decoder.raw_decode(text, i)
-        except ValueError:
+        except (ValueError, RecursionError):
             i = text.find("{", i + 1)
             continue
         spans.append((i, end, value))
@@ -112,10 +121,12 @@ def _coerce_args(raw: Any) -> dict[str, Any] | None:
     return None
 
 
-def _from_json_object(obj: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+def _from_json_object(obj: dict[str, Any], depth: int = 0) -> tuple[str, dict[str, Any]] | None:
+    if depth >= MAX_JSON_DEPTH:
+        return None
     fn = obj.get("function")
     if isinstance(fn, dict):  # OpenAI style {"type":"function","function":{...}}
-        return _from_json_object(fn)
+        return _from_json_object(fn, depth + 1)
     name = next((obj[k] for k in _NAME_KEYS if isinstance(obj.get(k), str)), None)
     if not name:
         return None
@@ -126,14 +137,16 @@ def _from_json_object(obj: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return name.strip(), args
 
 
-def _json_calls(value: Any) -> list[tuple[str, dict[str, Any]]]:
+def _json_calls(value: Any, depth: int = 0) -> list[tuple[str, dict[str, Any]]]:
+    if depth >= MAX_JSON_DEPTH:
+        return []
     if isinstance(value, dict):
         if isinstance(value.get("tool_calls"), list):
-            return [c for item in value["tool_calls"] for c in _json_calls(item)]
-        found = _from_json_object(value)
+            return [c for item in value["tool_calls"] for c in _json_calls(item, depth + 1)]
+        found = _from_json_object(value, depth)
         return [found] if found else []
     if isinstance(value, list):
-        return [c for item in value for c in _json_calls(item)]
+        return [c for item in value for c in _json_calls(item, depth + 1)]
     return []
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -10,6 +11,7 @@ import pytest
 from agentplatform.contracts.model_io import ModelResponse
 from agentplatform.models.fallback_parser import (
     MAX_CALLS,
+    MAX_JSON_DEPTH,
     MAX_TEXT_CHARS,
     parse_text_tool_calls,
 )
@@ -249,3 +251,48 @@ def test_matches_the_agent_loop_fallback_type() -> None:
     )
     assert used is True
     assert [(c.name, c.arguments) for c in calls] == [("click", {"x": 10, "y": 20})]
+
+
+# --- review fixes (T02 review) ----------------------------------------------------------
+
+INNER_CALL = '{"name": "click", "arguments": {"x": 1, "y": 2}}'
+
+
+def _nested(shape: str, depth: int) -> str:
+    """``depth`` levels of ``{"function": ...}`` or ``{"tool_calls": [...]}``."""
+    if shape == "function":
+        return '{"function": ' * depth + INNER_CALL + "}" * depth
+    return '{"tool_calls": [' * depth + INNER_CALL + "]}" * depth
+
+
+@pytest.mark.parametrize(("shape", "depth"), [("function", 1100), ("tool_calls", 1050)])
+def test_deeply_nested_json_does_not_raise(shape: str, depth: int) -> None:
+    text = _nested(shape, depth)
+    assert len(text) <= MAX_TEXT_CHARS  # balanced, so it decodes as one JSON object
+    assert parse_text_tool_calls(text, TOOLS) == []  # was RecursionError
+
+
+@pytest.mark.parametrize("shape", ["function", "tool_calls"])
+def test_nesting_up_to_the_depth_cap_still_parses(shape: str) -> None:
+    calls = parse_text_tool_calls(_nested(shape, MAX_JSON_DEPTH - 1), TOOLS)
+    assert [(c.name, c.arguments) for c in calls] == [("click", {"x": 1, "y": 2})]
+    assert parse_text_tool_calls(_nested(shape, MAX_JSON_DEPTH + 1), TOOLS) == []
+
+
+def test_recursion_error_in_the_json_decoder_skips_the_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CPython's C decoder copes with deep nesting today, but the pure-Python scanner
+    # (and other interpreters) raise RecursionError; that must skip the span.
+    real = json.JSONDecoder.raw_decode
+
+    def raw_decode(self: json.JSONDecoder, s: str, idx: int = 0) -> tuple[Any, int]:
+        if s.startswith('{"deep"', idx):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, s, idx)
+
+    monkeypatch.setattr(json.JSONDecoder, "raw_decode", raw_decode)
+    text = '{"deep": 1} {"tool": "key", "args": {"combo": "enter"}}'
+    assert [(c.name, c.arguments) for c in parse_text_tool_calls(text, TOOLS)] == [
+        ("key", {"combo": "enter"})
+    ]
