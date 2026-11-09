@@ -49,6 +49,7 @@ spec disagree, the spec wins and this page gets fixed.
 | Board | `runtime/coordination/board.py` (`BoardService`) | Implementation T14 |
 | Tools | `runtime/agent/tools/registry.py` (`ToolRegistry`) | Tool groups filled by T06, T14, T15 |
 | Action layer | `runtime/agent/actions.py` | T03 completes coordinate modes |
+| Agent step loop | `runtime/agent/loop.py` (`AgentRuntime`) | See [agent-loop.md](agent-loop.md) |
 | Config | `config.py` | env (`Settings`) + `models.yaml` + `policies.yaml` |
 | Fakes | `testing/` | `FakeModel`, `FakeSandbox`, `InMemoryBus`, `InMemoryEventStore`, … |
 
