@@ -456,14 +456,16 @@ close such a block is replaced by `[tag removed]`.
 
 | User action | What happens | Events |
 |---|---|---|
-| `command.steer` | `post_user_steering`: a `note` from the user to one agent (`to=[id]`) or all; shown first in the digest | `board.entry_posted`, `user.steer` (+ `supervisor.triggered(user_message)` when addressed to all) |
+| `command.steer` | `post_user_steering`: a `note` from the user to one agent (`to=[id]`) or all; shown first in the digest. In `parallel_isolated`: a system note in the agent's next step (`AgentRuntime.add_note`, kept until the next task when idle) | `board.entry_posted` (not isolated), `user.steer`; the supervisor detects a broadcast itself (one `user_message` trigger) |
 | `command.takeover` / `command.release` | the agent's control goes to `takeover` / `run`; the loop shows `paused_by_user` and, on release, adds the re-observe note | `user.takeover_started` / `user.takeover_ended` |
 | `request_approval` (agent) | `HitlApprovalGate.request`: row + event in one transaction, wait for the decision or 15 minutes | `approval.requested` (with `frame_id`) |
 | `command.decide_approval` | `decide`: race-safe (second decision → 409, no event); the waiting tool returns Approved/Denied | `approval.decided` |
 | supervisor `flag` | approval for an action of an agent; the agent gets a note to wait and the decision as a note (not paused) | `approval.requested`, `approval.decided` |
 | `command.stop` (kill switch) | every control → `stop` at once, pending approvals expire, `Scheduler.stop("user")`, replay flush | `approval.decided(expired)`, `task.cancelled`, `session.stopped`, `agent.stopped` |
 
-Steering is refused in `parallel_isolated` (no digests). A cancelled approval wait
+In `parallel_isolated` steering is refused only when no control is bound for the
+agent. The scheduler assigns no new task to an agent whose control is `pause` or
+`takeover`; it is eligible again after release. A cancelled approval wait
 (stop) expires the approval; after a restart `expire_pending(session_id)` closes
 approvals nobody waits for.
 
@@ -477,7 +479,7 @@ is tracked. `AgentBudget` is the per-agent view over the shared `SessionBudget`.
 
 Wiring (T13 follow-up): build one `HitlApprovalGate` (`PostgresApprovalStore`) and
 one `HitlController` per session; in the `RuntimeFactory` call
-`ctrl.bind_control(agent.id, deps.control)` and pass `approvals=gate`,
+`ctrl.bind_control(agent.id, deps.control, runtime)` and pass `approvals=gate`,
 `budget=AgentBudget(...)`, `registry=guard_registry(build_agent_registry() + T14/T15
 tools, policy)` and `extra_rules=approval_rules_text(policy)`; route T18 commands to
 `ctrl.handle`.
