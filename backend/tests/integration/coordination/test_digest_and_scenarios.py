@@ -58,7 +58,9 @@ async def test_answer_resolves_and_tops_the_askers_next_digest(
 ) -> None:
     ada, brook = world.actor(world.ada), world.actor(world.brook)
     q = await board.post(world.id, draft("question", "Which currency?"), author=ada, step=1)
-    await board.post(world.id, draft(title="Pricing page found", tags=["pricing"]), author=brook)
+    await board.post(
+        world.id, draft(title="Pricing page found", tags=["pricing"]), author=brook, step=1
+    )
     await board.post(world.id, draft("progress", "halfway"), author=brook, step=1)
     answer = await answer_as_supervisor(board, world.id, q.id, "Use EUR")
     assert (await board.get(q.id)).status == "resolved"
@@ -89,7 +91,7 @@ async def test_direct_messages_are_invisible_to_others(
 async def test_decision_and_user_steering_rank_first(
     board: PostgresBoardService, world: World, digests: DigestBuilder
 ) -> None:
-    await board.post(world.id, draft(title="a fact"), author=world.actor(world.brook))
+    await board.post(world.id, draft(title="a fact"), author=world.actor(world.brook), step=1)
     await post_decision(board, world.id, "Use EUR everywhere")
     await post_user_steering(board, world.id, "Focus on the cheapest plan", to=[world.ada.id])
     out = await digests.build(world.ada, make_task(session_id=world.id), since=0, budget_tokens=700)

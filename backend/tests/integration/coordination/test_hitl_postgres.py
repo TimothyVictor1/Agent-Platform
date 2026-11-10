@@ -63,6 +63,7 @@ async def test_steer_reaches_only_the_target_agents_digest_first(
         world.id,
         BoardEntryDraft(kind="fact", title="Prices are in EUR"),
         author=world.actor(world.ada),
+        step=1,
     )
     ctrl = _controller(world, board, recorder, sessionmaker)
     entry = await ctrl.steer(world.brook.id, "Check the annual plan too.", by=USER)

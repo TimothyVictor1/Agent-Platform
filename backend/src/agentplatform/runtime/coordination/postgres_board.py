@@ -114,7 +114,9 @@ class PostgresBoardService:
     ) -> BoardEntry:
         draft = draft.model_copy(update={"tags": _clean_tags(draft.tags)})
         _check_static_rules(draft, author)
-        limited_agent = author.id if author.type == "agent" and step is not None else None
+        if author.type == "agent" and step is None:
+            raise BoardRuleError("agent posts require the current step number")
+        limited_agent = author.id if author.type == "agent" else None
         if limited_agent is not None and step is not None:
             self._limiter.check(limited_agent, step, draft.kind)
 

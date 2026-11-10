@@ -43,8 +43,8 @@ class BoardService(Protocol):
         * ``artifact`` entries need ``artifact_id``.
 
         Agent authors are rate limited per SPEC §13.1 using ``step`` (the agent's
-        current step number): max 1 ``progress`` per 10 steps, max 6 posts per 10
-        steps; over the limit raise ``RateLimitedError``. A new claim overlapping an
+        current step number, required for agents): max 1 ``progress`` and max 6
+        posts per 10 steps; over the limit raise ``RateLimitedError``. A claim overlapping an
         open claim triggers a ``supervisor.triggered`` (``claim_conflict``) event.
         """
         ...
