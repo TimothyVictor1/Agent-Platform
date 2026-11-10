@@ -374,3 +374,22 @@ async def test_wait_for_answer_times_out_and_cleans_up(
     assert not board._waiters
     with pytest.raises(NotFoundError):
         await board.wait_for_answer("missing", 1)
+
+
+async def test_hidden_status_changes_look_like_missing_entries(
+    board: PostgresBoardService, world: World, bus: InMemoryBus
+) -> None:
+    claim = await board.post(
+        world.id, draft("claim", to=[world.brook.id]), author=world.actor(world.ada), step=1
+    )
+    before = list(bus.published)
+    for entry_id in (claim.id, "missing-entry"):
+        with pytest.raises(NotFoundError) as caught:
+            await board.set_status(entry_id, "resolved", actor=world.actor(world.cleo))
+        assert str(caught.value) == f"board entry {entry_id} does not exist"
+    assert bus.published == before
+    assert (await board.get(claim.id)).status == "open"
+    # Visible recipients still get the ordinary permission error.
+    with pytest.raises(BoardRuleError, match="author"):
+        await board.set_status(claim.id, "resolved", actor=world.actor(world.brook))
+    await board.set_status(claim.id, "resolved", actor=world.actor(world.ada))

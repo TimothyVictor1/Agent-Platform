@@ -261,6 +261,8 @@ class PostgresBoardService:
         reason: str | None = None,
     ) -> BoardEntry:
         entry = await self.get(entry_id)
+        if actor.type == "agent" and (actor.id is None or not visible_to(entry, actor.id)):
+            raise NotFoundError(f"board entry {entry_id} does not exist")
         is_author = actor.type == "agent" and actor.id == entry.author.id
         if not (is_author or actor.type in ("supervisor", "user")):
             raise BoardRuleError("only the author, the supervisor or the user can change this")
