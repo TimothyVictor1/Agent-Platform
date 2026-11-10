@@ -53,13 +53,16 @@ works in tests.
 |---|---|---|
 | `DigestProvider.build(agent, task, since=, budget_tokens=) -> Digest(text, cursor)` | `NoDigest` | T14 (`coordination/digest.py`) |
 | `ControlState.mode` / `wait_for_change(current)` | `LocalControlState` (in-process) | T13 (Redis key + in-process event) |
-| `ApprovalGate.request(...) -> Approval` (decided or expired) | none: `request_approval` returns an `ERROR` | T18 |
+| `ApprovalGate.request(...) -> Approval` (decided or expired) | none: `request_approval` returns an `ERROR` | T18 (`runtime/hitl.py` `HitlApprovalGate`) |
 | `BudgetMonitor.record(usage)` / `exceeded()` | `LocalBudget(session.budgets)` | T11 (session-wide, shared by agents) |
 | `RosterProvider.roster() -> [RosterEntry]` | just this agent | T13 |
 | `renew_lease() -> bool` | none | T11/T13 (`LeaseStore.renew`) |
 | `Summarizer.summarize(previous, lines, task=)` | `TruncatingSummarizer` | `ModelSummarizer(summarizer model)` |
 | `fallback_parser(text, tool_names)` | none | T02 (`models/fallback_parser.py`) |
 | `ToolRegistry` | `build_agent_registry()` (desktop + control) | T13 adds coordination (T14) and artifact (T15) tools |
+
+`extra_rules` (default empty) is appended to the `## Rules` section of the system
+prompt; T18 passes the session policies (`policies.approval_rules_text`).
 
 `EventSink` is `EventRecorder`, `EphemeralPublisher` is `EventBus`, and frames go to
 an `ArtifactStore`. `AgentRuntimeConfig.from_role(profile.agent)` maps the model

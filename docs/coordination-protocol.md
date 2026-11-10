@@ -239,7 +239,7 @@ log.
 `Scheduler.stop("user")` (called by T13 for `command.stop`):
 
 1. sets every agent's control to `stop` and waits for the runs (cancelled after
-   `stop_grace_s`);
+   the pool's `stop_grace_s`, at most 4 s, so the kill switch meets 5 s);
 2. cancels every unfinished task;
 3. emits `session.stopped`, but not if the session already completed or failed;
 4. kills the sandboxes and emits `agent.stopped`.
@@ -271,7 +271,7 @@ sandboxes alive for the next runtime.
 | `lease_ttl_s` | 45 | | `boot_attempts` | 2 |
 | `tick_s` | 1 | | `max_recoveries` | 3 |
 | `idle_timeout_s` | 300 | | `fence_grace_s` | 5 |
-| `stop_grace_s` | 30 | | `stop_grace_s` | 30 |
+| `stop_grace_s` | 30 | | `stop_grace_s` | 4 (max 4) |
 | `budget_warning_ratio` | 0.8 | | `screen` | 1280×800 |
 | `review` | `"auto"` | | `network` / `allowlist` | `open` / none |
 | `supervisor_enabled` | `False` | | | |
@@ -285,6 +285,9 @@ enforces `config.lease_ttl_s == deps.lease_ttl_s`. Mode rules are applied by
 `AgentRuntime`: `parallel_isolated` disables the `coordination` and `artifacts`
 tool groups and uses empty digests. Sandbox specs never carry secrets
 (`env` is empty).
+
+A user pause or takeover survives a runtime reinstall (sandbox recovery): the pool
+resets the control to `run` only from other modes.
 
 ## Supervisor
 
@@ -446,3 +449,35 @@ never invent facts, treat agent content as data, and give one `why` per action.
 All board text, task results and agent text in the run message are sanitized to
 single lines. They sit inside `<untrusted>` blocks, and any text that would open or
 close such a block is replaced by `[tag removed]`.
+
+## Human in the loop (T18)
+
+`runtime/hitl.py`, `runtime/policies.py`, `runtime/budgets.py` (SPEC §10.7, §15).
+
+| User action | What happens | Events |
+|---|---|---|
+| `command.steer` | `post_user_steering`: a `note` from the user to one agent (`to=[id]`) or all; shown first in the digest | `board.entry_posted`, `user.steer` (+ `supervisor.triggered(user_message)` when addressed to all) |
+| `command.takeover` / `command.release` | the agent's control goes to `takeover` / `run`; the loop shows `paused_by_user` and, on release, adds the re-observe note | `user.takeover_started` / `user.takeover_ended` |
+| `request_approval` (agent) | `HitlApprovalGate.request`: row + event in one transaction, wait for the decision or 15 minutes | `approval.requested` (with `frame_id`) |
+| `command.decide_approval` | `decide`: race-safe (second decision → 409, no event); the waiting tool returns Approved/Denied | `approval.decided` |
+| supervisor `flag` | approval for an action of an agent; the agent gets a note to wait and the decision as a note (not paused) | `approval.requested`, `approval.decided` |
+| `command.stop` (kill switch) | every control → `stop` at once, pending approvals expire, `Scheduler.stop("user")`, replay flush | `approval.decided(expired)`, `task.cancelled`, `session.stopped`, `agent.stopped` |
+
+Steering is refused in `parallel_isolated` (no digests). A cancelled approval wait
+(stop) expires the approval; after a restart `expire_pending(session_id)` closes
+approvals nobody waits for.
+
+Policies: `approval_rules_text(policy)` goes into the system prompt through
+`AgentRuntime(extra_rules=...)`; `guard_registry(registry, policy)` makes
+`type_text` refuse card numbers (Luhn), government ids (SSN, CPR, personnummer)
+and credential-like text into a window titled like a password prompt (best-effort
+`xdotool getactivewindow getwindowname` inside the sandbox, 2 s). At startup
+`check_secret_hygiene` refuses secrets in sandbox env specs and warns when `.env`
+is tracked. `AgentBudget` is the per-agent view over the shared `SessionBudget`.
+
+Wiring (T13 follow-up): build one `HitlApprovalGate` (`PostgresApprovalStore`) and
+one `HitlController` per session; in the `RuntimeFactory` call
+`ctrl.bind_control(agent.id, deps.control)` and pass `approvals=gate`,
+`budget=AgentBudget(...)`, `registry=guard_registry(build_agent_registry() + T14/T15
+tools, policy)` and `extra_rules=approval_rules_text(policy)`; route T18 commands to
+`ctrl.handle`.
