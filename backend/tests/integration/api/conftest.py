@@ -35,6 +35,7 @@ from agentplatform.api.tickets import InMemoryTicketStore, TicketStore
 from agentplatform.config import ModelsConfig, PoliciesConfig, RoleConfig, Settings, load_settings
 from agentplatform.contracts.common import Actor, HealthStatus
 from agentplatform.contracts.events import EventDraft, SessionCreated
+from agentplatform.contracts.model_io import ModelRequest, ModelResponse
 from agentplatform.contracts.session import Session
 from agentplatform.db.event_store import EventStore, PostgresEventStore
 from agentplatform.db.session import SessionMaker, create_engine, create_sessionmaker
@@ -89,7 +90,7 @@ def models_config() -> ModelsConfig:
 
 def make_settings(*, token: str | None = None) -> Settings:
     return Settings(
-        _env_file=None,  # type: ignore[call-arg]
+        _env_file=None,
         app_api_token=SecretStr(token) if token else None,
         anthropic_api_key=SecretStr(FAKE_ANTHROPIC_KEY),
         frontend_origin="http://localhost:3000",
@@ -109,7 +110,7 @@ class StubModelClient:
     def name(self) -> str:
         return self.role.model
 
-    async def complete(self, req: object) -> object:  # pragma: no cover - unused
+    async def complete(self, req: ModelRequest) -> ModelResponse:  # pragma: no cover
         raise NotImplementedError
 
     async def health(self) -> HealthStatus:
