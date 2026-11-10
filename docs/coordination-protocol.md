@@ -278,16 +278,63 @@ sandboxes alive for the next runtime.
 
 ### Wiring (T13)
 
-T13 supplies a `RuntimeFactory(session, agent, sandbox, deps) -> AgentRuntime`
-that builds the model, registry, digest, board and approvals. It must pass `deps`
-through to `AgentRuntime`: `control`, `budget`, `renew_lease` and `state`. The pool
-enforces `config.lease_ttl_s == deps.lease_ttl_s`. Mode rules are applied by
-`AgentRuntime`: `parallel_isolated` disables the `coordination` and `artifacts`
-tool groups and uses empty digests. Sandbox specs never carry secrets
-(`env` is empty).
+`runtime/container.py` (`SessionRuntime`) builds, per session, the `AgentPool`,
+the `Scheduler` and the `RuntimeFactory`. The factory passes `deps` through to
+`AgentRuntime` (`control`, `renew_lease`, `state`; `budget` as
+`AgentBudget(session_budget, agent.id)`) and adds:
 
-A user pause or takeover survives a runtime reinstall (sandbox recovery): the pool
-resets the control to `run` only from other modes.
+- `registry`: `guard_registry(build_agent_registry()` + `register_coordination_tools`
+  + `register_artifact_tools, policy)` (`AgentRuntime` applies the mode, so
+  `parallel_isolated` disables coordination and artifacts and uses empty digests);
+- `digest=DigestBuilder(board, postgres_task_lister)`, `board=PostgresBoardService`,
+  `approvals=HitlApprovalGate`, `extra_rules=approval_rules_text(policy)`, the
+  summarizer role, the text tool-call fallback parser and a roster from the
+  scheduler state.
+
+The pool enforces `config.lease_ttl_s == deps.lease_ttl_s`. It gets
+`prefetch=PrefetchAdapter(StoreArtifactPrefetch(...))`, so upstream artifacts are
+copied into `~/Shared` before a task's first step, and the network policy from
+`policies.yaml`. Sandbox specs never carry secrets (`env` is empty): every provider
+is wrapped in `GuardedProvider`, which refuses a spec whose env contains a
+configured secret and caps E2B lifetimes at `APP_E2B_MAX_LIFETIME_MIN`.
+
+**Control path.** `AgentControls` (`runtime/controls.py`) is the only writer of an
+agent's control besides the pool's own stop. It keeps per-agent holds (`takeover`,
+`session_pause`, `supervisor_pause`, `user_pause`) and a stop flag, derives one mode
+(`stop` > `takeover` > `pause` > `run`), writes it to the pool's
+`LocalControlState` and mirrors it to Redis (`{prefix}:control:{session}`). A
+restarted runtime restores the holds before the agents run again. The same object
+is the supervisor's `AgentControl` port (instead of `PoolAgentControl`) and,
+through `adapter(agent_id)`, the `SettableControl` bound in `HitlController`. A user
+pause or takeover survives a runtime reinstall (sandbox recovery): the pool resets
+the control to `run` only from other modes. An idle agent that is held shows
+`paused_by_user` (and `idle` again on release), so the API's release check works
+without a run.
+
+**Read models.** The runtime appends through `ProjectingEventStore`
+(`runtime/readmodels.py`): in each event's transaction the `sessions`, `plans`,
+`tasks`, `agents` and `frames` tables follow the log. A plan proposal (also a
+follow-up's) or a user's plan edit sets the session to `awaiting_approval`; a
+supervisor plan change does not.
+
+**Commands.** `runtime/commands.py` (`CommandRouter`) handles every command type
+(list in its docstring). Events a command causes carry `causation_id =
+command.id`, including `session.plan_proposed` and `session.planning_failed`.
+`command.pause`/`command.resume` emit `session.paused`/`session.resumed` and set or
+clear the session hold on every agent; `command.stop` goes to
+`HitlController.stop`, which calls `Scheduler.stop("user")`. Redelivered commands
+are skipped (command log in Redis, and the event log's causation ids).
+
+**Ownership and recovery.** `runtime/main.py`: a runtime owns a session through a
+lease in the `sessions` table (`runtime_owner`, `runtime_lease_expires_at`; 30 s TTL,
+renewed every 10 s) and runs its scheduler, supervisor, watcher and command loop.
+On startup it adopts every session that is planning, awaiting approval, running,
+paused, or completed within `APP_ADOPT_COMPLETED_HOURS`, expires approvals nobody
+waits for and restores the control holds; the scheduler adopts the agents. A
+session left in `planning` without a plan for `APP_PLANNING_SWEEP_S` is planned by
+the sweep. A runtime that loses a lease stops that session's work without touching
+its sandboxes. On SIGTERM sandboxes are kept and leases released, so the next
+runtime adopts at once.
 
 ## Supervisor
 
@@ -299,15 +346,18 @@ posting helpers (`coordination/posting.py`), the public `Scheduler.reassign` and
 
 ### Wiring (T13)
 
-- Build the scheduler with `supervised_scheduler_config(base)`. This sets
-  `review="supervisor"` (results wait for the supervisor's review) and
-  `supervisor_enabled=True` (a DAG stalled by failed tasks waits for the supervisor
-  instead of failing the session).
-- Build `Supervisor(session=…, model=<supervisor role>, board=…, events=<EventRecorder>,
-  store=…, bus=…, scheduler=<the Scheduler>, control=PoolAgentControl(pool),
-  frames=<ArtifactStore>, config=SupervisorConfig.from_policies(policies))`. Run
-  `run()` next to `Scheduler.run()`. It returns when the session is stopped or
-  failed, or after `stop()`.
+- The scheduler is built with `supervised_scheduler_config(base)`: `review="supervisor"`
+  (results wait for the supervisor's review) and `supervisor_enabled=True` (a DAG
+  stalled by failed tasks waits for the supervisor instead of failing the session).
+- `Supervisor(session=…, model=BudgetedModelClient(<supervisor role>, session_budget),
+  board=PostgresBoardService, events=<EventRecorder>, store=…, bus=…,
+  scheduler=<the Scheduler>, control=AgentControls, frames=<ArtifactStore>,
+  config=…)` with `require_human_for_plan_changes` from `policies.yaml`. It runs next
+  to `Scheduler.run()` and is stopped when the session ends.
+- `BudgetedModelClient` adds the supervisor's model usage (tokens, cost; 0 steps) to
+  the session's `SessionBudget`, so it counts toward the 80 % warning and the 100 %
+  stop. That usage is in no event, so after a runtime restart the budget counts only
+  agent steps (contract change requested).
 
 ### Triggers
 
@@ -477,9 +527,11 @@ and credential-like text into a window titled like a password prompt (best-effor
 `check_secret_hygiene` refuses secrets in sandbox env specs and warns when `.env`
 is tracked. `AgentBudget` is the per-agent view over the shared `SessionBudget`.
 
-Wiring (T13 follow-up): build one `HitlApprovalGate` (`PostgresApprovalStore`) and
-one `HitlController` per session; in the `RuntimeFactory` call
-`ctrl.bind_control(agent.id, deps.control, runtime)` and pass `approvals=gate`,
-`budget=AgentBudget(...)`, `registry=guard_registry(build_agent_registry() + T14/T15
-tools, policy)` and `extra_rules=approval_rules_text(policy)`; route T18 commands to
-`ctrl.handle`.
+Wiring (T13): one `HitlApprovalGate` per runtime process (`PostgresApprovalStore`)
+and one `HitlController` per session. The `RuntimeFactory` calls
+`ctrl.bind_control(agent.id, controls.adapter(agent.id), runtime)` and passes
+`approvals=gate`, `budget=AgentBudget(...)`, the guarded registry and
+`extra_rules=approval_rules_text(policy)`. Steer, takeover, release,
+decide_approval and stop go to `ctrl.handle`. At startup the runtime runs
+`check_secret_hygiene_async` (and `GuardedProvider` checks every sandbox spec);
+adopted sessions get `expire_pending`.

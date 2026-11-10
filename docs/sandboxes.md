@@ -187,9 +187,18 @@ runtime should call it at startup and periodically. When a worktree is removed,
 
 ## Open points
 
-- **A durable `ControlTokenStore`.** `SandboxRef` and the `agents.sandbox` column
-  are documented as "no secrets", so the token needs its own storage. Until that is
-  wired (T13), a runtime restart loses the tokens, and `connect()` raises
-  `SandboxExpiredError`.
+- **Control tokens are durable (T13).** The runtime passes a `RedisControlTokenStore`
+  (`runtime/controls.py`): `{prefix}:sandbox-token:{sandbox_id}`, with a TTL of the
+  sandbox's lifetime plus 15 minutes (`GuardedProvider` passes the lifetime during
+  `create`). A restarted runtime can therefore `connect()` to running desktops.
+  `SandboxRef` and the `agents.sandbox` column still carry no secret.
 - **`spec.timeout_minutes` is not enforced** by Docker itself. It is recorded in
-  `agentplatform.expires_at` and enforced by `cleanup_orphans`.
+  `agentplatform.expires_at` and enforced by `cleanup_orphans`, which the runtime
+  runs at startup and every `APP_ORPHAN_SWEEP_MIN` (default 10) minutes with the ids
+  of the sessions that are still alive. It only touches containers of its own
+  worktree (`APP_WORKTREE`).
+- **Memory limit.** Each desktop gets `APP_DOCKER_MEM_LIMIT` (default `2g`) as its
+  memory and memory+swap limit (no swap). The provider's own default stays `4g`.
+- **E2B lifetime cap.** Sandbox lifetimes follow the session's `max_wall_minutes`;
+  E2B requests are capped at `APP_E2B_MAX_LIFETIME_MIN` (default 60) with a
+  `sandbox_lifetime_capped` warning.

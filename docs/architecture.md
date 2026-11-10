@@ -41,7 +41,7 @@ spec disagree, the spec wins and this page gets fixed.
 | Contracts (domain, events, commands, API DTOs) | `backend/src/agentplatform/contracts/` | Source of truth; exported to `frontend/src/contracts/generated.ts` |
 | DAG validation | `contracts/plan.py` (`validate_plan`, `topological_order`) | Pure functions, used by API, planner, UI mirror |
 | Model interface | `models/base.py` (`ModelClient`) | Providers in `models/` (T02) |
-| Sandbox interface | `sandboxes/base.py` (`SandboxProvider`, `SandboxHandle`) | Providers in `sandboxes/` (T07, T08) |
+| Sandbox interface | `sandboxes/base.py` (`SandboxProvider`, `SandboxHandle`) | Providers in `sandboxes/` (T07, T08); E2B: [sandboxes-e2b.md](sandboxes-e2b.md) |
 | Event store | `db/event_store.py` (`EventStore`) | Postgres implementation (T04) |
 | Bus + leases | `bus/base.py` (`EventBus`, `LeaseStore`) | Redis implementation (T04) |
 | Emitting events | `eventing.py` (`EventRecorder`) | append → publish, the only way to emit |
