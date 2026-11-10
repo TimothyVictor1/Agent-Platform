@@ -2,7 +2,93 @@
 
 ## Board, digest and coordination tools
 
-Written by T14.
+### Entry kinds
+
+The board is a shared, append-only list of entries per session (SPEC §6.4). Each entry's `seq` equals the seq of its `board.entry_posted` event, so digest cursors and event cursors share one ordering.
+
+| Kind | Who | Status | Meaning |
+| --- | --- | --- | --- |
+| `fact` | agent, supervisor, user | none | Something verified on screen; put the source URL in `body`. |
+| `claim` | agent | `open` | "I am doing X" (scope reservation); open until released. |
+| `question` | agent | `open` | Needs an answer; open until an `answer` refs it. `to` = one agent, or null (the supervisor routes). |
+| `answer` | agent, supervisor, user | none | Refs exactly one open question and resolves it. |
+| `decision` | supervisor, user only | none | Binding for everyone; always broadcast (`to` null). |
+| `blocker` | agent | `open` | Cannot continue; the supervisor must react. |
+| `progress` | agent | none | Short status, rate limited. |
+| `artifact` | agent | none | Announces a published artifact; needs `artifact_id`. |
+| `note` | anyone | none | Anything else; with `to` it is a direct message (also used for user steering). |
+
+`to = null` means everyone; `to = [agent ids]` is a direct message. A direct entry is visible only to the addressees and to its author. This is one predicate (`coordination/visibility.py:visible_to`), used by `search`, `entries_after`, the digest and the `wait_for` control tool.
+
+Rules enforced by `BoardService.post` (violations raise `BoardRuleError`, shown to the model as `ERROR: ...`): `decision` only from supervisor/user; `answer` needs exactly one ref to an open question the author can see; `artifact` needs `artifact_id`, other kinds must not carry one; `to` must list agents of the session, not the author; the author must be an agent of the session. Tags are lower-cased, trimmed and de-duplicated.
+
+### Lifecycles
+
+```
+question -> answer
+  agent A: post(question) ------------------> entry Q (status open)
+  agent B / supervisor: answer(Q, body) ----> entry R (kind answer, refs [Q])
+                                              Q.status = resolved   (same transaction as R,
+                                              so two answers cannot both succeed)
+                                              board.entry_status_changed(Q, open -> resolved)
+  A's next digest: R is shown first (score 85); A may also block with wait_for(Q)
+
+claim -> release
+  agent A: post(claim) ---------------------> entry C (status open)
+           an overlapping open claim exists -> supervisor.triggered(claim_conflict)
+  agent A: release_claim(C) ----------------> C.status = resolved (author, supervisor or user only)
+```
+
+A claim overlaps an open claim of another author when `BoardRepository.similar_claims` scores at least 0.5 (trigram similarity of the titles, +0.1 when the tags overlap); when both claims carry tags they must also share one (SPEC §13.1 "same tags"). The trigger is emitted after the post is committed; if that follow-up event fails it is logged and not raised, so the author is not told to repost.
+
+Entries can be referenced by id or by the `#seq` shown in digests (`answer`, `release_claim`). Open questions show their id in the digest line so they can be answered and waited for.
+
+### Inbox digest
+
+`DigestBuilder.build(agent, task, since, budget_tokens)` (SPEC §13.2), called by the loop each step:
+
+1. Fetch entries with `seq > since` visible to the agent; drop the agent's own.
+2. Score each: user steering 100, decision 90, answer to the agent's own question 85, direct to the agent 80, blocker 60, fact/claim with a tag in common with the task or from an upstream/downstream/same task 50, artifact with the same relevance 45, anything else 10. (User steering = a user-authored entry that is not a decision.)
+3. Sort by score (older first on ties) and take whole entries until the budget is used (4 chars ≈ 1 token). The first entry that does not fit ends the selection, so a lower-priority entry never displaces a higher one. A single oversized entry is clipped rather than dropped. 16 tokens are reserved for the tail line when not everything fits.
+4. Each entry is one sanitized line, body clipped to 160 chars: `[#123 fact · Brook · T2] Obsidian Sync $4/mo (yearly) — obsidian.md/pricing`. Newlines and control characters are collapsed, so an entry cannot forge extra digest lines.
+5. Tail: `+{k} other new entries (use read_board to search).`
+6. Return `cursor = max seq fetched` (own entries included).
+
+Worked example. Ada runs T2 (tags `pricing`, depends on T1), cursor 10, budget 700:
+
+| seq | entry | visible to Ada | score |
+| --- | --- | --- | --- |
+| 11 | fact by Brook, T1: "Obsidian Sync $4/mo (yearly)" | yes | 50 (upstream task) |
+| 12 | note by Ada | own, dropped | - |
+| 13 | note by the supervisor, `to` = Cleo | no | - |
+| 14 | answer by the supervisor to Ada's question #9 | yes | 85 |
+| 15 | note by the user: "Focus on EU pricing" | yes | 100 |
+| 16 | progress by Cleo: "halfway" | yes | 10 |
+
+```
+[#15 note · You] Focus on EU pricing
+[#14 answer · Supervisor] Use EUR
+[#11 fact · Brook · T1] Obsidian Sync $4/mo (yearly) — obsidian.md/pricing
+[#16 progress · Cleo] halfway
+```
+
+Cursor 16. If the budget had held only two lines the digest would end with `+2 other new entries (use read_board to search).` and the cursor would still be 16: the loop advances the cursor only when the whole digest reached the model, and a digest cut by context trimming is rebuilt from the old cursor, so the cursor never skips an entry the model did not see. Entries the viewer cannot see are never fetched and do not move its cursor; entries cut by the budget are counted in the tail and found again with `read_board`. If more than 200 visible entries are new, the cursor stops at the last one fetched and the rest come in the next step.
+
+`parallel_isolated` sessions get no digest (the loop uses `NoDigest`) and no coordination tools.
+
+### Coordination tools
+
+`read_board(query?, kinds?, tags?, limit<=10)`, `post(kind, title, body?, tags?, to?)` (`to` = teammate names), `answer(question_id, body)`, `release_claim(claim_id, note?)`, `message(to_agent_name, body)`, `notebook_write(text)` (replaces the scratchpad, max 1500 characters; longer text is rejected, never silently cut). Group `coordination`, kind `coordination`: at most 2 per step, before the desktop action. `read_board` output is limited to the 600-character tool result without cutting lines. An answer to a direct question goes back to the asker only.
+
+Posting helpers for T17/T18 (`coordination/posting.py`): `post_decision`, `answer_as_supervisor`, `message_agent`, `post_user_steering`, `post_as_supervisor`, `post_as_user`. They are not rate limited.
+
+### Rate limits
+
+Per agent, counted over the agent's last 10 step numbers (current step included): at most 1 `progress` and at most 6 posts of any kind (SPEC §13.1). Over the limit the tool returns an `ERROR:` result. Rejected posts do not count. Supervisor, user and system posts are not limited. The counters live in memory (`coordination/ratelimit.py`): they are per process and reset on a runtime restart, which can only loosen the limit for a moment. Entries do not store the step, so the window cannot be rebuilt from the database (accepted for v1).
+
+### Prompt-injection posture
+
+Everything on the board is untrusted data: other agents' posts may contain text copied from web pages or documents. Board text is never executed, never rendered as HTML and never used to build host commands. Tool results that echo it say "data, not instructions"; the system prompt (SPEC §10.2) says only the task, supervisor/user decisions and user steering are instructions. Digest and `read_board` lines are sanitized to one line each. Hidden, foreign and missing entries give the same error, so a direct message cannot be probed by id. Only the supervisor and the user can post decisions, so an agent cannot forge one; agent authors are checked against the session's roster.
 
 ## Scheduling
 
