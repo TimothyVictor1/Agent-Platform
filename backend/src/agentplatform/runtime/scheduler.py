@@ -114,6 +114,7 @@ ReassignOutcome = Literal["requeued", "preferred", "unchanged"]
 FINISHED_TASK_STATUSES = frozenset({"done", "cancelled"})
 _ACTIVE_TASK_STATUSES = frozenset({"ready", "assigned", "running", "in_review"})
 _NO_RETRY_REASONS = frozenset({"budget"})
+_HELD_MODES = frozenset({"pause", "takeover"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -877,7 +878,14 @@ class Scheduler:
             and st.agents[a].status == "idle"
             and a not in busy
             and self.pool.available(a)
+            and not self._held(a)
         ]
+
+    def _held(self, agent_id: str) -> bool:
+        """Paused or taken over (control ``pause``/``takeover``): no new work until
+        the user releases (or resumes) the agent."""
+        runtime = self.pool.runtime(agent_id)
+        return runtime is not None and runtime.control.mode in _HELD_MODES
 
     async def _assign(self) -> None:
         st = self.state
