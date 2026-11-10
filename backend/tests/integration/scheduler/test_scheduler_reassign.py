@@ -39,20 +39,25 @@ async def test_running_task_moves_to_the_named_agent_and_old_run_is_fenced() -> 
         await wait_running(w, "T1", "Ada")
         brook = agent_id(w, "Brook")
         assert await w.scheduler.reassign("T1", brook) == "requeued"
+        ada = agent_id(w, "Ada")
         accepted = await w.wait_for("task.accepted", lambda p: p.task_key == "T1")
+        # The old agent is fenced and recovered in the background. Its run may notice
+        # the lost lease first ("task lease lost") or the pool marks it ("task T1
+        # reassigned"); either way it goes to error and then back to idle.
+        await w.wait_for(
+            "agent.status_changed", lambda p: p.agent_id == ada and p.status == "error"
+        )
+        await w.wait_for(
+            "agent.status_changed",
+            lambda p: p.agent_id == ada and p.status == "idle" and p.reason == "recovered",
+        )
         assigned = await w.payloads("task.assigned")
-        statuses = await w.payloads("agent.status_changed")
     finally:
         await w.stop()
 
     assert accepted.task_key == "T1"
-    assert [p.agent_id for p in assigned] == [agent_id(w, "Ada"), brook]
+    assert [p.agent_id for p in assigned] == [ada, brook]
     assert assigned[1].attempt == 2  # the interrupted run counted as an attempt
-    ada = agent_id(w, "Ada")
-    assert any(p.agent_id == ada and p.reason == "task T1 reassigned" for p in statuses)
-    assert any(
-        p.agent_id == ada and p.status == "idle" and p.reason == "recovered" for p in statuses
-    )
 
 
 async def test_without_agent_the_current_agent_is_avoided() -> None:
