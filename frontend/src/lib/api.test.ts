@@ -1,10 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { env } from "./env";
+import type { WsTicket } from "@/contracts/generated";
 
 vi.mock("./env", () => ({ env: { apiUrl: "http://api.example", apiToken: "test-token", mock: false } }));
 afterEach(() => vi.unstubAllGlobals());
 describe("REST client", () => {
+  it("fetches a typed ticket with POST and sends the API token only in the bearer header", async () => {
+    const ticket: WsTicket = { ticket: "fake_ws_ticket_for_session_00000001", expires_at: "2026-11-10T12:01:00Z", ttl_s: 60 }; // gitleaks:allow
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(ticket), { status: 201 }));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(api.wsTicket("a/b")).resolves.toEqual(ticket);
+    const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://api.example/api/v1/sessions/a%2Fb/ws-ticket");
+    expect(init.method).toBe("POST"); expect(init.body).toBeUndefined();
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer test-token");
+    expect(url).not.toContain("test-token");
+  });
   it("returns undefined for a 204 response", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
     await expect(api.pause("s")).resolves.toBeUndefined();

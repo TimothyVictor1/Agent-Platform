@@ -1,4 +1,4 @@
-import type { ApprovePlanRequest, CreateSessionRequest, EventPage, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage } from "@/contracts/generated";
+import type { ApprovePlanRequest, CreateSessionRequest, EventPage, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage, WsTicket } from "@/contracts/generated";
 import { fieldErrors, validatePlan } from "@/components/plan/validation";
 import { applyEvent, initialSessionState } from "@/lib/session-store";
 import { budgets, health, profiles, scriptedEvents, session } from "./fixtures";
@@ -30,6 +30,10 @@ export async function mockRequest(rawUrl: string, init: RequestInit): Promise<Re
   if (resource === "sessions") {
     const current = sessions().find(item => item.id === resourceId);
     if (!current) return json({ type: "about:blank", title: "Session not found", status: 404, detail: "Unknown mock session" }, 404);
+    if (action === "ws-ticket" && init.method === "POST") {
+      const ticket = `mock_ws_ticket_${crypto.randomUUID()}`; // gitleaks:allow
+      return json({ ticket, expires_at: new Date(Date.now() + 60000).toISOString(), ttl_s: 60 } satisfies WsTicket, 201);
+    }
     const review = isReviewSession(resourceId);
     const events = (review ? reviewEvents(resourceId) : null) ?? scriptedEvents(resourceId);
     if (!action) {
