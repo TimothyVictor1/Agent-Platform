@@ -30,6 +30,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src tests
       - run: uv run pytest -m "not infra"
+      - run: uv run --project backend python -m pytest evals/tests
+        working-directory: .
 
   backend-infra:
     name: Backend infra tests (Postgres + Redis)

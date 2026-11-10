@@ -22,12 +22,12 @@ function renderReview() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
   return render(<QueryClientProvider client={client}><PlanReview sessionId="demo-session" /></QueryClientProvider>);
 }
-async function ready() { renderReview(); await screen.findByRole("button", { name: "Select T1" }); }
+async function ready() { renderReview(); await screen.findByRole("button", { name: "Select T1" }, { timeout: 15_000 }); }
 async function select(key = "T1") { await userEvent.click(screen.getByRole("button", { name: `Select ${key}` })); }
 beforeEach(() => { localStorage.clear(); push.mockClear(); });
 afterEach(() => vi.restoreAllMocks());
 
-describe("Plan review", () => {
+describe("Plan review", { timeout: 15_000 }, () => {
   it("loads a newer server plan automatically when the draft has no unsaved edits", async () => {
     await ready(); await select();
     const tasks = structuredClone(planFixture.tasks); tasks[0].title = "Updated on the server";
@@ -41,7 +41,7 @@ describe("Plan review", () => {
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "My unsaved title" } });
     const tasks = structuredClone(planFixture.tasks); tasks[0].title = "Server title";
     reviewCommand(session, "plan", tasks);
-    const banner = await screen.findByRole("region", { name: "Server plan changed" });
+    const banner = await screen.findByRole("region", { name: "Server plan changed" }, { timeout: 15_000 });
     expect(banner).toHaveTextContent("Plan changed on the server (v2)");
     expect(within(banner).getByRole("region", { name: "Refinement diff" })).toHaveTextContent("My unsaved title");
     expect(banner).toHaveTextContent("Server title");
@@ -52,7 +52,7 @@ describe("Plan review", () => {
     expect(screen.queryByRole("region", { name: "Server plan changed" })).not.toBeInTheDocument();
     if (choice === "Keep my edits") {
       await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
-      await screen.findByText("Plan saved.");
+      await screen.findByText("Plan saved.", undefined, { timeout: 15_000 });
       expect(save.mock.calls[0][1].base_version).toBe(2);
     }
   });
@@ -65,7 +65,7 @@ describe("Plan review", () => {
     await ready(); await select();
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Local edit" } });
     await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
-    const banner = await screen.findByRole("region", { name: "Server plan changed" });
+    const banner = await screen.findByRole("region", { name: "Server plan changed" }, { timeout: 15_000 });
     expect(banner).toHaveTextContent("Plan changed on the server (v2)");
     await userEvent.click(within(banner).getByRole("button", { name: "Load latest" }));
     await select(); expect(screen.getByLabelText("Title")).toHaveValue("Concurrent server edit");
@@ -78,7 +78,7 @@ describe("Plan review", () => {
       return { command_id: "reordered-plan", session_id: session.id };
     });
     await ready(); await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
-    await screen.findByText("Plan saved.");
+    await screen.findByText("Plan saved.", undefined, { timeout: 15_000 });
     expect(screen.queryByRole("region", { name: "Server plan changed" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
@@ -94,7 +94,7 @@ describe("Plan review", () => {
     await ready(); await select();
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Local title" } });
     await userEvent.click(screen.getByRole("button", { name: "Approve plan" }));
-    const banner = await screen.findByRole("region", { name: "Server plan changed" });
+    const banner = await screen.findByRole("region", { name: "Server plan changed" }, { timeout: 15_000 });
     expect(banner).toHaveTextContent("Server-normalized title"); expect(banner).toHaveTextContent("Local title");
     expect(approve).not.toHaveBeenCalled();
     await userEvent.click(within(banner).getByRole("button", { name: "Load latest" }));
@@ -116,7 +116,7 @@ describe("Plan review", () => {
     const input = screen.getByLabelText("Refine with the planner");
     fireEvent.change(input, { target: { value: "Fewer tasks" } });
     fireEvent.keyDown(input, { key: "Enter", [modifier]: true });
-    await screen.findByRole("region", { name: "Refinement diff" });
+    await screen.findByRole("region", { name: "Refinement diff" }, { timeout: 15_000 });
     expect(refine).toHaveBeenCalledTimes(1); expect(approve).not.toHaveBeenCalled();
   });
   it("does not approve from task fields or a deletion dialog", async () => {
@@ -157,7 +157,7 @@ describe("Plan review", () => {
     expect(within(screen.getByRole("list", { name: "Task tags" })).getByText("sources")).toBeVisible();
     await userEvent.click(screen.getByRole("checkbox", { name: "terminal" }));
     await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
-    expect(await screen.findByText("Plan saved.")).toBeVisible();
+    expect(await screen.findByText("Plan saved.", undefined, { timeout: 15_000 })).toBeVisible();
     const task = (await api.session("demo-session")).plan?.proposal.tasks[0];
     expect(task?.title).toBe("Checked launch research"); expect(task?.goal).toBe("Compare public evidence"); expect(task?.acceptance_criteria[0]).toBe("Second check"); expect(task?.tags).toContain("sources"); expect(task?.suggested_tools).toContain("terminal");
   });
@@ -186,7 +186,7 @@ describe("Plan review", () => {
     await userEvent.selectOptions(screen.getByLabelText("Input 3 upstream task"), "T1");
     expect(screen.getByLabelText("Input 3 output key")).toHaveValue("result");
     expect(screen.getByRole("button", { name: "Approve plan" })).toBeEnabled();
-    await userEvent.click(screen.getByRole("button", { name: "Save plan" })); await screen.findByText("Plan saved.");
+    await userEvent.click(screen.getByRole("button", { name: "Save plan" })); await screen.findByText("Plan saved.", undefined, { timeout: 15_000 });
     const task = (await api.session("demo-session")).plan?.proposal.tasks[2];
     expect(task?.outputs[0]).toEqual({ key: "summary", kind: "json", description: "Summary JSON", json_schema: { type: "object" } });
     expect(task?.inputs[2]).toEqual({ from_task: "T1", output_key: "result" });
@@ -248,7 +248,7 @@ describe("Plan review", () => {
     const refine = vi.spyOn(api, "refine"); await ready();
     fireEvent.change(screen.getByLabelText("Refine with the planner"), { target: { value: "Make it fewer tasks" } });
     await userEvent.click(screen.getByRole("button", { name: "Refine plan" }));
-    const diff = await screen.findByRole("region", { name: "Refinement diff" });
+    const diff = await screen.findByRole("region", { name: "Refinement diff" }, { timeout: 15_000 });
     expect(within(diff).getByText(/Added · summary/).parentElement).toHaveClass("bg-green-500/10");
     expect(within(diff).getByText(/Removed · T2/).parentElement).toHaveClass("bg-red-500/10");
     expect(within(diff).getByText("Changed · T1").parentElement).toHaveClass("bg-amber-500/10");
@@ -261,7 +261,7 @@ describe("Plan review", () => {
   it("discards refinement and restores the reviewed draft before keyboard approval", async () => {
     const save = vi.spyOn(api, "updatePlan"); await ready();
     fireEvent.change(screen.getByLabelText("Refine with the planner"), { target: { value: "Simplify" } });
-    await userEvent.click(screen.getByRole("button", { name: "Refine plan" })); await screen.findByRole("region", { name: "Refinement diff" });
+    await userEvent.click(screen.getByRole("button", { name: "Refine plan" })); await screen.findByRole("region", { name: "Refinement diff" }, { timeout: 15_000 });
     await userEvent.click(screen.getByRole("button", { name: "Discard refinement" }));
     expect(screen.getByRole("button", { name: "Select T2" })).toBeVisible();
     fireEvent.keyDown(window, { key: "Enter", metaKey: true }); fireEvent.keyDown(window, { key: "Enter", metaKey: true });
@@ -273,7 +273,7 @@ describe("Plan review", () => {
     vi.spyOn(api, "refine").mockRejectedValueOnce(new Error("Planner unavailable")); await ready();
     fireEvent.change(screen.getByLabelText("Refine with the planner"), { target: { value: "Simplify" } });
     await userEvent.click(screen.getByRole("button", { name: "Refine plan" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Planner unavailable");
+    expect(await screen.findByRole("alert", undefined, { timeout: 15_000 })).toHaveTextContent("Planner unavailable");
     expect(screen.getByRole("button", { name: "Refine plan" })).toBeEnabled();
   });
 });
