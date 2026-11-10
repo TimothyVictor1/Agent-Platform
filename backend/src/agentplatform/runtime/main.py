@@ -68,6 +68,9 @@ log = structlog.get_logger(__name__)
 _ENDED = frozenset({"failed", "stopped"})
 _COMMAND_RETRY_S = 1.0
 _COMMAND_DRAIN_S = 10.0
+_UNKNOWN_SESSION_ATTEMPTS = 20
+"""Deliveries of a plan command for a session this runtime's database does not know
+before it is dropped (about 10 minutes with the 30 s visibility timeout)."""
 
 
 class SessionHost:
@@ -355,8 +358,14 @@ class Runtime:
                 self._log.error("new_session_failed", error=type(exc).__name__)
                 await asyncio.sleep(_COMMAND_RETRY_S)
                 continue  # not acked: redelivered
+            if session is None and delivery.attempt < _UNKNOWN_SESSION_ATTEMPTS:
+                # Not in our database: the queue may be shared with runtimes of other
+                # databases (worktrees on one Redis). Leave it for them (redelivered
+                # after the visibility timeout); give up after a few rounds.
+                self._log.info("new_session_unknown", session_id=item.session_id)
+                continue
             if host is None:
-                # unknown session, or another runtime holds it (its sweep plans it)
+                # unknown for good, or another runtime holds it (its sweep plans it)
                 self._log.info("new_session_not_hosted", session_id=item.session_id)
             else:
                 host.plan_requests.put_nowait(item.id)

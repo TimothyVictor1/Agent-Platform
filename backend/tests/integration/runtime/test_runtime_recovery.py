@@ -142,3 +142,11 @@ async def test_graceful_shutdown_keeps_sandboxes_and_releases_leases(world: Worl
     nxt = await world.runtime("rt-b")
     assert sid in nxt.hosts
     await world.wait_event(sid, "session.completed", limit_s=20)
+
+
+async def test_plan_command_for_an_unknown_session_is_left_for_others(world: World) -> None:
+    await world.runtime("rt-a")
+    stranger = world.command("command.plan_session", "session-of-another-database")
+    await world.bus.enqueue("sessions:new", stranger)
+    await asyncio.sleep(0.3)
+    assert world.bus.pending_count("sessions:new") == 1  # not acked: not ours to drop
