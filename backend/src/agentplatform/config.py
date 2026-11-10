@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal, Self
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
@@ -43,6 +43,9 @@ DEFAULT_DATABASE_URL = (
     "postgresql+asyncpg://agentplatform:agentplatform@localhost:5432/agentplatform"
 )
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+"""Local development defaults (the compose services). Real deployments set
+``DATABASE_URL``/``REDIS_URL`` or at least ``APP_PG_PASSWORD``/``APP_REDIS_PASSWORD``
+to strong values."""
 
 RoleName = Literal["planner", "supervisor", "agent", "summarizer"]
 ROLE_NAMES: tuple[RoleName, ...] = ("planner", "supervisor", "agent", "summarizer")
@@ -88,17 +91,38 @@ class Settings(BaseSettings):
     local_llm_key: SecretStr | None = None
 
     frontend_origin: str = "http://localhost:3000"
+    app_api_host: str = "127.0.0.1"
+    """Interface the API binds to. Keep ``127.0.0.1`` unless a reverse proxy in front
+    of it handles TLS and ``APP_API_TOKEN`` is set."""
     app_api_port: int = 8000
     app_db_name: str = ""
+    app_pg_password: SecretStr | None = None
+    """Password of the compose Postgres; used in the default ``DATABASE_URL``."""
+    app_redis_password: SecretStr | None = None
+    """Password of the compose Redis (``requirepass``); used in the default ``REDIS_URL``."""
     app_worktree: str = ""
     app_live: bool = False
     app_docker: bool = False
+
+    # -- runtime (T13) --
+    app_runtime_id: str = ""
+    """Owner name of this runtime process in session leases (default: host-pid-random)."""
+    app_docker_mem_limit: str = Field(default="2g", pattern=r"^[1-9][0-9]*[bkmg]$")
+    """Memory (and memory+swap, so no swap) limit of each ``docker_local`` desktop."""
+    app_e2b_max_lifetime_min: int = Field(default=60, ge=1, le=24 * 60)
+    """Upper bound of an E2B sandbox lifetime; longer requests are capped (warning)."""
+    app_adopt_completed_hours: float = Field(default=24.0, ge=0)
+    """A restarted runtime adopts completed sessions this recent (for follow-ups)."""
+    app_planning_sweep_s: float = Field(default=60.0, ge=5)
+    """A session still in ``planning`` with no plan after this long is planned again."""
+    app_orphan_sweep_min: float = Field(default=10.0, ge=1)
+    """Period of the orphaned-sandbox cleanup (also run at startup)."""
 
     @property
     def effective_database_url(self) -> str:
         """``DATABASE_URL`` (or the compose default) with the database name replaced by
         ``APP_DB_NAME`` when set, so each worktree gets its own database."""
-        url = self.database_url or DEFAULT_DATABASE_URL
+        url = self.database_url or _with_password(DEFAULT_DATABASE_URL, self.app_pg_password)
         if not self.app_db_name:
             return url
         parts = urlsplit(url)
@@ -106,7 +130,8 @@ class Settings(BaseSettings):
 
     @property
     def effective_redis_url(self) -> str:
-        return self.redis_url or DEFAULT_REDIS_URL
+        """``REDIS_URL``, else the compose default (with ``APP_REDIS_PASSWORD``)."""
+        return self.redis_url or _with_password(DEFAULT_REDIS_URL, self.app_redis_password)
 
     @property
     def repo_root(self) -> Path:
@@ -128,8 +153,23 @@ class Settings(BaseSettings):
             self.openrouter_api_key,
             self.gemini_api_key,
             self.local_llm_key,
+            self.app_pg_password,
+            self.app_redis_password,
         ]
         return [s.get_secret_value() for s in secrets if s and s.get_secret_value()]
+
+
+def _with_password(url: str, password: SecretStr | None) -> str:
+    """``url`` with its password replaced (user kept; ``""`` for Redis' default user)."""
+    if password is None or not password.get_secret_value():
+        return url
+    parts = urlsplit(url)
+    user = parts.username or ""
+    host = parts.hostname or "localhost"
+    netloc = f"{quote(user, safe='')}:{quote(password.get_secret_value(), safe='')}@{host}"
+    if parts.port is not None:
+        netloc += f":{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 def load_settings() -> Settings:

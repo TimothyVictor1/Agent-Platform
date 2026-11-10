@@ -1,6 +1,9 @@
 # Local infrastructure shared by every worktree (fixed project name, so all
 # Superset worktrees use the same containers; each worktree gets its own database,
-# see APP_DB_NAME and `make db-up`). Dev-only credentials; never expose these ports.
+# see APP_DB_NAME and `make db-up`). The default credentials are for local development
+# only; never expose these ports. Real deployments set APP_PG_PASSWORD and
+# APP_REDIS_PASSWORD (in .env) to strong values. POSTGRES_PASSWORD only applies when the
+# data volume is first created; to change it later run ALTER USER inside psql.
 # If 5432 is taken (e.g. a Homebrew Postgres), set APP_PG_PORT in .env and point
 # DATABASE_URL at that port (APP_REDIS_PORT works the same way for 6379).
 name: agentplatform
@@ -10,7 +13,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: agentplatform
-      POSTGRES_PASSWORD: agentplatform  # local dev only
+      POSTGRES_PASSWORD: ${APP_PG_PASSWORD:-agentplatform}
       POSTGRES_DB: agentplatform
     ports:
       - "127.0.0.1:${APP_PG_PORT:-5432}:5432"
@@ -24,13 +27,23 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # requirepass only when APP_REDIS_PASSWORD is set ($$ is expanded inside the container)
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes $${APP_REDIS_PASSWORD:+--requirepass "$$APP_REDIS_PASSWORD"}
+    environment:
+      APP_REDIS_PASSWORD: ${APP_REDIS_PASSWORD:-}
     ports:
       - "127.0.0.1:${APP_REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$$APP_REDIS_PASSWORD" ]; then export REDISCLI_AUTH="$$APP_REDIS_PASSWORD"; fi;
+          redis-cli ping | grep -q PONG
       interval: 2s
       timeout: 3s
       retries: 30

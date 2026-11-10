@@ -4,7 +4,7 @@
   URLs carry single-use tickets. ``RequestContextMiddleware`` logs paths only.
 * ``ws_ping_interval``/``ws_ping_timeout`` = 20 s: protocol-level ping/pong for every
   WebSocket (SPEC T09 item 6); dead peers are dropped after one missed pong.
-* Binds to ``127.0.0.1`` (single local user, SPEC §16 auth v1).
+* Binds to ``APP_API_HOST`` (default ``127.0.0.1``: single local user, SPEC §16 auth v1).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def main() -> None:
     settings = load_settings()
     uvicorn.run(
         create_app(settings=settings),
-        host="127.0.0.1",
+        host=settings.app_api_host,
         port=settings.app_api_port,
         access_log=False,
         log_config=None,

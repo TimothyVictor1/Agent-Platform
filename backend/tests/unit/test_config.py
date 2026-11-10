@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr, ValidationError
 
 from agentplatform.config import (
     DEFAULT_DATABASE_URL,
@@ -99,3 +100,41 @@ def test_settings_secrets_are_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
     s = Settings(_env_file=None)
     assert "sk-test-123" not in repr(s)
     assert "sk-test-123" in s.secret_values()
+
+
+def test_default_urls_use_compose_passwords(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("DATABASE_URL", "REDIS_URL", "APP_DB_NAME", "APP_PG_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("APP_REDIS_PASSWORD", raising=False)
+    s = Settings(_env_file=None)
+    assert s.effective_redis_url == "redis://localhost:6379/0"
+    s = Settings(
+        _env_file=None,
+        app_pg_password=SecretStr("p@ss/word"),  # gitleaks:allow
+        app_redis_password=SecretStr("r3dis"),  # gitleaks:allow
+    )
+    assert s.effective_database_url == (
+        "postgresql+asyncpg://agentplatform:p%40ss%2Fword@localhost:5432/agentplatform"
+    )
+    assert s.effective_redis_url == "redis://:r3dis@localhost:6379/0"
+    assert "r3dis" in s.secret_values()
+    assert "r3dis" not in repr(s)
+    # an explicit URL always wins
+    s = Settings(
+        _env_file=None, redis_url="redis://cache:6380/1", app_redis_password=SecretStr("x")
+    )
+    assert s.effective_redis_url == "redis://cache:6380/1"
+
+
+def test_runtime_settings_defaults_and_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("APP_API_HOST", "APP_DOCKER_MEM_LIMIT", "APP_E2B_MAX_LIFETIME_MIN"):
+        monkeypatch.delenv(name, raising=False)
+    s = Settings(_env_file=None)
+    assert s.app_api_host == "127.0.0.1"
+    assert s.app_docker_mem_limit == "2g"
+    assert s.app_e2b_max_lifetime_min == 60
+    assert s.app_adopt_completed_hours == 24
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, app_docker_mem_limit="lots")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, app_e2b_max_lifetime_min=0)
