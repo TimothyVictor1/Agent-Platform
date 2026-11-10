@@ -633,6 +633,7 @@ class Scheduler:
             raise RuntimeError("Scheduler.run() is already running")
         self._running = True
         feeder = asyncio.create_task(self._feed(), name=f"scheduler-feed-{self.session_id}")
+        feeder.add_done_callback(self._feeder_done)
         try:
             await self._catch_up()
             self.budget.usage = self.state.usage
@@ -728,6 +729,17 @@ class Scheduler:
         return task is not None and retry_decision(task, order.attempt, reason)
 
     # -- input ----------------------------------------------------------------------
+
+    def _feeder_done(self, task: asyncio.Task[None]) -> None:
+        error = None if task.cancelled() else task.exception()
+        if error is not None:
+            self._log.error(
+                "scheduler_feeder_exited",
+                task_name=task.get_name(),
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        elif self._running and not self.finished:
+            self._log.warning("scheduler_feeder_exited", task_name=task.get_name())
 
     async def _feed(self) -> None:
         async for record in self._bus.subscribe(self.session_id, include_ephemeral=False):

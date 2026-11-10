@@ -170,3 +170,32 @@ async def test_recovery_recreates_a_lost_sandbox() -> None:
         await w.stop()
     assert len(w.provider.specs) == 2
     assert len(await w.payloads("agent.sandbox_ready")) == 2
+
+
+async def test_background_task_exceptions_are_logged_and_cancelled_tasks_are_quiet() -> None:
+    from structlog.testing import capture_logs
+
+    from .harness import build_world
+
+    w = build_world()
+    error = RuntimeError("boot unexpectedly failed")
+
+    async def fail() -> None:
+        raise error
+
+    async def hang() -> None:
+        await asyncio.Event().wait()
+
+    with capture_logs() as logs:
+        task = w.pool._spawn(fail(), "boot-test-agent")
+        await asyncio.gather(task, return_exceptions=True)
+        cancelled = w.pool._spawn(hang(), "cancel-test-agent")
+        await asyncio.sleep(0)
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
+    failures = [e for e in logs if e["event"] == "pool_task_failed"]
+    assert len(failures) == 1
+    assert failures[0]["task_name"] == "boot-test-agent"
+    assert failures[0]["session_id"] == w.session.id
+    assert failures[0]["exc_info"][1] is error
+    assert not w.pool._background

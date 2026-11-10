@@ -482,8 +482,20 @@ class AgentPool:
 
         task = asyncio.create_task(runner(), name=name)
         self._background.add(task)
-        task.add_done_callback(self._background.discard)
+        task.add_done_callback(self._task_done)
         return task
+
+    def _task_done(self, task: asyncio.Task[None]) -> None:
+        self._background.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self._log.error(
+                "pool_task_failed",
+                task_name=task.get_name(),
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _emit(self, payload: EventPayload) -> None:
         await self._events.record(
