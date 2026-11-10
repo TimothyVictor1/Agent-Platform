@@ -79,14 +79,28 @@ async def _make_target(name: str) -> Target:
         if not status.ok:
             pytest.fail(f"docker_local is not usable: {status.error}")
         return Target(name, provider, real_desktop=True)
-    # T08: add the "e2b" branch here (E2BProvider from settings, real_desktop=True).
+    if name == "e2b":
+        from agentplatform.sandboxes.e2b_provider import make_e2b_contract_provider
+
+        e2b = make_e2b_contract_provider()
+        status = await e2b.health()
+        if not status.ok:
+            pytest.fail(f"e2b is not usable: {status.error}")
+        return Target(name, e2b, real_desktop=True)
     raise AssertionError(f"unknown provider {name}")
 
 
 PROVIDERS = [
     pytest.param("fake", id="fake"),
     pytest.param("docker_local", id="docker_local", marks=pytest.mark.docker),
-    # T08: pytest.param("e2b", id="e2b", marks=pytest.mark.live),
+    pytest.param(
+        "e2b",
+        id="e2b",
+        marks=[
+            pytest.mark.live,
+            pytest.mark.skipif(not Settings().e2b_api_key, reason="needs E2B_API_KEY"),
+        ],
+    ),
 ]
 
 
