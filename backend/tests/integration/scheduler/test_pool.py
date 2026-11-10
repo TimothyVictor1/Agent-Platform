@@ -11,7 +11,7 @@ from agentplatform.contracts.sandbox import SandboxSpec
 from agentplatform.errors import NotSupportedError
 from agentplatform.testing import FakeSandbox, FakeSandboxProvider, make_task_draft
 
-from .harness import FAST_POOL, FAST_SCHEDULER, World, open_session, until
+from .harness import FAST_POOL, FAST_SCHEDULER, World, open_session
 
 
 async def _count(w: World, type_: str, n: int) -> bool:
@@ -61,7 +61,7 @@ async def test_agents_get_deterministic_names_and_colors_and_boot_concurrently()
             "agent.status_changed",
             lambda p: p.status == "idle" and p.previous == "booting",
         )
-        await until(lambda: _count(w, "agent.sandbox_ready", 5))
+        await w.until(lambda: _count(w, "agent.sandbox_ready", 5))
     finally:
         await w.stop()
     agents = [p.agent for p in await w.payloads("agent.created")]
@@ -111,7 +111,7 @@ async def test_idle_agents_are_paused_and_resumed_for_a_followup() -> None:
     )
     try:
         await w.wait_for("session.completed")
-        await until(lambda: _all_paused(w.provider))
+        await w.until(lambda: _all_paused(w.provider))
         await w.approve([*first, make_task_draft("T2", depends_on=["T1"])], 2)
         await w.wait_for("task.accepted", lambda p: p.task_key == "T2")
     finally:

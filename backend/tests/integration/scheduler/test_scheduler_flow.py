@@ -18,7 +18,6 @@ from .harness import (
     open_session,
     order_of,
     seq_of,
-    until,
 )
 
 SPEC_DAG: dict[str, list[str]] = {"T1": [], "T2": [], "T3": ["T1", "T2"], "T4": ["T3"]}
@@ -165,7 +164,7 @@ async def test_real_lease_ttl_reaches_the_agent_runtime() -> None:
         return pool.runtime(pool.agent_ids[0]) is not None
 
     try:
-        await until(_has_runtime)
+        await w.until(_has_runtime)
         runtime = pool.runtime(pool.agent_ids[0])
         assert runtime is not None
         assert runtime.config.lease_ttl_s == 45.0

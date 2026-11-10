@@ -81,7 +81,7 @@ async def test_user_stop_cancels_hung_runs_within_the_cap() -> None:
     try:
         await w.wait_for("task.started", lambda p: p.task_key == "T1")
         await w.wait_for("task.started", lambda p: p.task_key == "T2")
-        await asyncio.sleep(0.3)  # both runs are now inside the hung run_command
+        await w.sleep(0.3)  # both runs are now inside the hung run_command
         assert w.pool.any_running()
         started = time.monotonic()
         async with asyncio.timeout(10):

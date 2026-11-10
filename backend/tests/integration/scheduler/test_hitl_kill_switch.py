@@ -16,7 +16,7 @@ from agentplatform.runtime.agent.loop import LocalControlState
 from agentplatform.runtime.hitl import HitlApprovalGate, HitlController, InMemoryApprovalStore
 from agentplatform.testing import FakeSandbox, FakeSandboxProvider
 
-from .harness import FAST_POOL, Behavior, TaskModel, open_session, until
+from .harness import FAST_POOL, Behavior, TaskModel, open_session
 
 
 class HangingSandbox(FakeSandbox):
@@ -73,11 +73,11 @@ async def test_kill_switch_stops_everything_within_5_seconds() -> None:
                 frame_id=None,
             )
         )
-        await asyncio.sleep(0.3)  # Ada is inside the hung command; the others in the model
+        await w.sleep(0.3)  # Ada is inside the hung command; the others in the model
         assert w.pool.any_running()
         hung = sandboxes[0]
         assert isinstance(hung, HangingSandbox)
-        await until(lambda: _entered(hung))
+        await w.until(lambda: _entered(hung))
 
         started = time.monotonic()
         report = await asyncio.wait_for(ctrl.stop(by=Actor.user("u1")), 10)

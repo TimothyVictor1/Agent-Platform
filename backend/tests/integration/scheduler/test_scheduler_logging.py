@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from structlog.testing import capture_logs
 
-from .harness import open_session, until
+from .harness import open_session
 
 
 @pytest.mark.parametrize("crash", [False, True])
@@ -27,7 +27,7 @@ async def test_feeder_exit_while_running_is_logged(
             async def logged() -> bool:
                 return any(e["event"] == "scheduler_feeder_exited" for e in logs)
 
-            await until(logged, limit_s=1)
+            await w.until(logged, limit_s=1)
             await w.wait_for("session.completed")  # durable-store catch-up still works
         finally:
             await w.stop()

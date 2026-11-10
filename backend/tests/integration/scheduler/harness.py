@@ -1,22 +1,23 @@
 """Test harness for the scheduler: FakeSandbox provider, a task-aware fake model,
 in-memory event store/bus/leases and helpers to open sessions and wait for events.
 
-No network, no Docker, no real model. Timeouts are scaled down (ack 0.3 s, lease
-1 s, heartbeat 0.05 s, tick 0.02 s) so failure paths run in well under a second.
+No network, no Docker, no real model. One fake clock drives scheduler deadlines,
+leases, queue visibility and polling limits. Wall time spent executing fake steps
+or waiting for the event loop does not spend the assignment or lease allowance.
 """
 
 from __future__ import annotations
 
 import asyncio
-import itertools
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from agentplatform.bus.base import Delivery, EventBus, QueueItem
 from agentplatform.contracts.agent import Agent
-from agentplatform.contracts.common import Actor, HealthStatus, SessionMode, new_id
+from agentplatform.contracts.common import Actor, HealthStatus, SessionMode, new_id, utcnow
 from agentplatform.contracts.events import (
     EphemeralMessage,
     Event,
@@ -30,7 +31,7 @@ from agentplatform.contracts.model_io import ModelRequest, ModelResponse, ToolSp
 from agentplatform.contracts.plan import PlanProposal
 from agentplatform.contracts.session import Budgets, Session
 from agentplatform.contracts.task import TaskDraft
-from agentplatform.db.event_store import EventStore
+from agentplatform.db.event_store import DraftFactory, EventStore, ReadModelUpdate
 from agentplatform.eventing import EventRecorder
 from agentplatform.runtime.agent.loop import AgentRuntime, AgentRuntimeConfig, build_agent_registry
 from agentplatform.runtime.agent.tools.registry import ToolResult
@@ -62,13 +63,73 @@ async def fast_sleep(seconds: float) -> None:
     await asyncio.sleep(0)
 
 
-async def until(check: Callable[[], Awaitable[bool]], limit_s: float = 5.0) -> None:
-    """Poll ``check`` every 10 ms until it is true; ``TimeoutError`` after ``limit_s``."""
-    async with asyncio.timeout(limit_s):
-        for _ in itertools.count():  # polling a fake: nothing to wait on
-            if await check():
-                return
-            await asyncio.sleep(0.01)
+@dataclass
+class FakeClock:
+    """Time moves only when the harness sleeps, never when a loaded host is slow."""
+
+    epoch: datetime = field(default_factory=utcnow)
+    elapsed: float = 0.0
+
+    def now(self) -> datetime:
+        return self.epoch + timedelta(seconds=self.elapsed)
+
+    def monotonic(self) -> float:
+        return self.elapsed
+
+    def unix(self) -> float:
+        return self.now().timestamp()
+
+    async def sleep(self, seconds: float) -> None:
+        # Let workers, scheduler ticks and real Postgres I/O progress before
+        # moving virtual time. The yield has no wall-clock deadline.
+        await asyncio.sleep(0.01)
+        self.elapsed += seconds
+        await asyncio.sleep(0)
+
+
+class ClockedStore:
+    """Keep event timestamps in the same domain as scheduler/lease deadlines.
+
+    The wrapped store still exercises its real ordering/persistence semantics.
+    Timestamp overrides are retained across scheduler restarts on this store.
+    """
+
+    def __init__(self, inner: EventStore, clock: FakeClock) -> None:
+        self.inner = inner
+        self.clock = clock
+        self._timestamps: dict[str, datetime] = {}
+
+    async def append(
+        self,
+        session_id: str,
+        draft: EventDraft | DraftFactory,
+        read_model_update: ReadModelUpdate | None = None,
+    ) -> Event:
+        event = await self.inner.append(session_id, draft, read_model_update)
+        self._timestamps[event.id] = self.clock.now()
+        return self._stamp(event)
+
+    def _stamp(self, event: Event) -> Event:
+        return event.model_copy(update={"ts": self._timestamps.get(event.id, event.ts)})
+
+    async def read(self, session_id: str, after_seq: int = 0, limit: int = 500) -> list[Event]:
+        return [self._stamp(e) for e in await self.inner.read(session_id, after_seq, limit)]
+
+    async def last_seq(self, session_id: str) -> int:
+        return await self.inner.last_seq(session_id)
+
+
+async def until(
+    check: Callable[[], Awaitable[bool]], limit_s: float = 5.0, *, clock: FakeClock
+) -> None:
+    """Poll using a virtual deadline; host scheduling delays do not exhaust it."""
+    deadline = clock.monotonic() + limit_s
+    while True:
+        if await check():
+            return
+        if clock.monotonic() >= deadline:
+            raise TimeoutError(f"condition not met within {limit_s:g} virtual seconds")
+        await clock.sleep(0.01)
 
 
 # -- model --------------------------------------------------------------------------------
@@ -201,6 +262,7 @@ def add_fake_post_tool(registry: Any) -> None:
 @dataclass
 class World:
     session: Session
+    clock: FakeClock
     store: EventStore
     bus: InMemoryBus
     queue_bus: EventBus
@@ -248,8 +310,27 @@ class World:
             found[:] = [p for p in await self.payloads(type_) if pred(p)]
             return bool(found)
 
-        await until(check, limit_s)
+        await self.until(check, limit_s)
         return found[0]
+
+    async def until(self, check: Callable[[], Awaitable[bool]], limit_s: float = 5.0) -> None:
+        await until(check, limit_s, clock=self.clock)
+
+    async def sleep(self, seconds: float) -> None:
+        # Exercise each scheduler tick during observation windows (held agents,
+        # supervisor stalls), just as the original real sleeps did.
+        remaining = seconds
+        while remaining > 0:
+            step = min(remaining, self.scheduler_config.tick_s, 0.01)
+            await self.clock.sleep(step)
+            remaining -= step
+
+    async def _wait_task(self, task: asyncio.Task[None]) -> None:
+        async def done() -> bool:
+            return task.done()
+
+        await self.until(done, 15.0)
+        await task
 
     # -- lifecycle ------------------------------------------------------------------
 
@@ -268,16 +349,13 @@ class World:
         if self.run_task is None:
             return
         if not self.scheduler.finished:
-            async with asyncio.timeout(15):
-                await self.scheduler.stop("user")
-        async with asyncio.timeout(15):
-            await self.run_task
+            await self._wait_task(asyncio.create_task(self.scheduler.stop("user")))
+        await self._wait_task(self.run_task)
 
     async def finished(self) -> None:
         """Wait until ``Scheduler.run`` returns (session stopped or failed)."""
         assert self.run_task is not None
-        async with asyncio.timeout(15):
-            await self.run_task
+        await self._wait_task(self.run_task)
 
     async def crash(self) -> None:
         """Cancel the scheduler like a runtime crash (sandboxes stay alive)."""
@@ -289,6 +367,7 @@ class World:
 def build_world(
     *,
     session: Session | None = None,
+    clock: FakeClock | None = None,
     store: EventStore | None = None,
     bus: InMemoryBus | None = None,
     leases: InMemoryLeaseStore | None = None,
@@ -302,9 +381,15 @@ def build_world(
     agent_ids: Sequence[str] | None = None,
 ) -> World:
     session = session or make_session(agent_count=3, status="awaiting_approval")
+    if isinstance(store, ClockedStore):
+        clock = clock or store.clock
+        assert clock is store.clock, "restarts must retain the shared clock"
+    clock = clock or FakeClock()
     store = store or InMemoryEventStore(strict=True)
-    bus = bus or InMemoryBus()
-    leases = leases or InMemoryLeaseStore()
+    if not isinstance(store, ClockedStore):
+        store = ClockedStore(store, clock)
+    bus = bus or InMemoryBus(clock=clock.monotonic)
+    leases = leases or InMemoryLeaseStore(clock=clock.unix)
     provider = provider or FakeSandboxProvider()
     model = model or TaskModel()
     recorder = EventRecorder(store, bus)
@@ -312,7 +397,7 @@ def build_world(
     deaf = DeafBus(bus) if deaf_agents else None
     if deaf is not None:
         queue_bus = deaf
-    budget = SessionBudget(session.budgets)
+    budget = SessionBudget(session.budgets, now=clock.now)
     frames = InMemoryArtifactStore()
     runtimes: list[AgentRuntime] = []
     no_renew_set = set(no_renew)
@@ -344,6 +429,7 @@ def build_world(
             budget=deps.budget,
             renew_lease=None if agent.name in no_renew_set else deps.renew_lease,
             sleep=fast_sleep,
+            clock=clock.monotonic,
         )
         runtimes.append(runtime)
         return runtime
@@ -369,9 +455,12 @@ def build_world(
         pool=pool,
         budget=budget,
         config=scheduler_config,
+        now=clock.now,
+        monotonic=clock.monotonic,
     )
     return World(
         session=session,
+        clock=clock,
         store=store,
         bus=bus,
         queue_bus=queue_bus,

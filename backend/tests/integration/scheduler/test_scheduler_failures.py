@@ -3,7 +3,6 @@ retries and max attempts, budgets, user stop."""
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 
 from agentplatform.contracts.session import Budgets
@@ -102,7 +101,7 @@ async def test_failed_task_with_supervisor_enabled_waits_instead_of_failing() ->
     )
     try:
         await w.wait_for("supervisor.triggered")
-        await asyncio.sleep(0.3)
+        await w.sleep(0.3)
         assert await w.payloads("session.failed") == []
     finally:
         await w.stop()

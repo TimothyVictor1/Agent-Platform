@@ -8,7 +8,7 @@ import pytest
 
 from agentplatform.errors import ConflictError, InvalidRequestError, NotFoundError
 
-from .harness import FAST_SCHEDULER, Behavior, TaskModel, World, open_session, until
+from .harness import FAST_SCHEDULER, Behavior, TaskModel, World, open_session
 
 # A long lease: these tests interrupt runs on purpose, so an expiry on a busy
 # machine must not interfere.
@@ -29,7 +29,7 @@ async def wait_running(w: World, key: str, name: str) -> None:
             and w.scheduler.state.agents[t.assigned_agent_id].name == name
         )
 
-    await until(check)
+    await w.until(check)
 
 
 async def test_running_task_moves_to_the_named_agent_and_old_run_is_fenced() -> None:

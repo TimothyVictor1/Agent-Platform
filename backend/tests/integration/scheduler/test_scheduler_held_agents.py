@@ -3,8 +3,6 @@ they are released."""
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from agentplatform.contracts.events import UserTakeoverEnded, UserTakeoverStarted
@@ -30,7 +28,7 @@ async def test_held_agent_gets_no_new_task_until_released(mode: ControlMode) -> 
         await w.record(UserTakeoverStarted(agent_id=agent_id))
         await w.approve([*first, make_task_draft("T2", depends_on=["T1"])], 2)
         await w.wait_for("task.ready", lambda p: p.task_key == "T2")
-        await asyncio.sleep(0.5)  # many scheduler ticks
+        await w.sleep(0.5)  # many scheduler ticks
         assert [p.task_key for p in await w.payloads("task.assigned")] == ["T1"]
 
         control.set("run")
