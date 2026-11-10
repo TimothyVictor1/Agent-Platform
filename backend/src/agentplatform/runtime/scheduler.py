@@ -83,6 +83,7 @@ from agentplatform.contracts.events import (
 from agentplatform.contracts.session import Budgets, Session, Usage
 from agentplatform.contracts.task import Task, TaskDraft
 from agentplatform.db.event_store import EventStore
+from agentplatform.errors import ConflictError, InvalidRequestError, NotFoundError
 from agentplatform.runtime.agent.context import UpstreamInputs, UpstreamValue
 from agentplatform.runtime.agent.loop import EventSink
 from agentplatform.runtime.pool import AgentPool, WorkOrder
@@ -90,6 +91,7 @@ from agentplatform.runtime.pool import AgentPool, WorkOrder
 __all__ = [
     "FINISHED_TASK_STATUSES",
     "Assignment",
+    "ReassignOutcome",
     "Scheduler",
     "SchedulerConfig",
     "SchedulerState",
@@ -108,6 +110,7 @@ __all__ = [
 log = structlog.get_logger(__name__)
 
 StopReason = Literal["user", "budget", "idle", "error"]
+ReassignOutcome = Literal["requeued", "preferred", "unchanged"]
 FINISHED_TASK_STATUSES = frozenset({"done", "cancelled"})
 _ACTIVE_TASK_STATUSES = frozenset({"ready", "assigned", "running", "in_review"})
 _NO_RETRY_REASONS = frozenset({"budget"})
@@ -542,6 +545,13 @@ class _StopRequest:
 
 
 @dataclass(slots=True)
+class _ReassignRequest:
+    task_key: str
+    agent_id: str | None
+    done: asyncio.Future[ReassignOutcome]
+
+
+@dataclass(slots=True)
 class _Stopping:
     reason: StopReason
     detail: str | None
@@ -584,7 +594,7 @@ class Scheduler:
         self._leases = leases
         self._now = now
         self._monotonic = monotonic
-        self._inbox: asyncio.Queue[Event | _StopRequest] = asyncio.Queue()
+        self._inbox: asyncio.Queue[Event | _StopRequest | _ReassignRequest] = asyncio.Queue()
         self._stopping: _Stopping | None = None
         self._stop_waiters: list[asyncio.Future[None]] = []
         self._finished = asyncio.Event()
@@ -631,6 +641,10 @@ class Scheduler:
             for fut in self._stop_waiters:
                 if not fut.done():
                     fut.set_result(None)
+            while not self._inbox.empty():
+                item = self._inbox.get_nowait()
+                if isinstance(item, _ReassignRequest) and not item.done.done():
+                    item.done.set_exception(ConflictError("the scheduler is not running"))
 
     async def stop(self, reason: StopReason = "user", detail: str | None = None) -> None:
         """Stop the session: stop every run, cancel unfinished tasks, emit
@@ -643,6 +657,33 @@ class Scheduler:
         self._stop_waiters.append(fut)
         await self._inbox.put(_StopRequest(reason, detail, fut))
         await fut
+
+    async def reassign(self, task_key: str, agent_id: str | None = None) -> ReassignOutcome:
+        """Move a task to another agent (used by the Supervisor's ``reassign_task``).
+
+        Runs inside the decision loop, so it never races assignment. ``agent_id``
+        is a preference (like a rework's): the task goes to that agent when it is
+        idle, otherwise to the best idle agent. With ``agent_id=None`` the current
+        agent is avoided for this task.
+
+        * ``pending`` / ``ready`` task: only the preference is recorded
+          (``"preferred"``).
+        * ``assigned`` / ``running`` task: emits ``task.ready``, releases the
+          current lease and fences the current agent's run through
+          ``AgentPool.recover`` (it reconnects its sandbox and returns to idle)
+          (``"requeued"``). A started run counts as an attempt.
+        * Already with ``agent_id``: nothing happens (``"unchanged"``).
+
+        Preferences live in memory and do not survive a runtime restart. Raises
+        ``NotFoundError`` (unknown task), ``InvalidRequestError`` (unknown or dead
+        agent) or ``ConflictError`` (task in review, finished or failed; session
+        stopping).
+        """
+        if not self._running:
+            raise RuntimeError("Scheduler.reassign() needs a running Scheduler.run()")
+        fut: asyncio.Future[ReassignOutcome] = asyncio.get_running_loop().create_future()
+        await self._inbox.put(_ReassignRequest(task_key, agent_id, fut))
+        return await fut
 
     def notify(self, event: Event) -> None:
         """Feed an event that did not come through the bus (optional)."""
@@ -697,6 +738,15 @@ class Scheduler:
             if isinstance(it, _StopRequest):
                 if self._stopping is None:
                     await self._begin_stop(it.reason, it.detail, announce=True)
+            elif isinstance(it, _ReassignRequest):
+                try:
+                    outcome = await self._reassign(it.task_key, it.agent_id)
+                except Exception as exc:
+                    if not it.done.done():
+                        it.done.set_exception(exc)
+                else:
+                    if not it.done.done():
+                        it.done.set_result(outcome)
             else:
                 await self._absorb(it)
 
@@ -878,6 +928,38 @@ class Scheduler:
             return
         await self._bus.enqueue(agent_queue(agent_id), event)
         self._log.info("task_assigned", task_key=task.key, agent_id=agent_id)
+
+    async def _reassign(self, key: str, agent_id: str | None) -> ReassignOutcome:
+        await self._catch_up()
+        st = self.state
+        task = st.tasks.get(key)
+        if task is None:
+            raise NotFoundError(f"task {key} does not exist")
+        if self._stopping is not None:
+            raise ConflictError("the session is stopping")
+        if task.status not in ("pending", "ready", "assigned", "running"):
+            raise ConflictError(f"task {key} is {task.status} and cannot be reassigned")
+        if agent_id is not None and (agent_id not in st.agents or self.pool.dead(agent_id)):
+            raise InvalidRequestError(f"agent {agent_id} is not a live agent of this session")
+        current = st.assignments.get(key)
+        if current is not None and current.agent_id == agent_id:
+            return "unchanged"
+        if agent_id is not None:
+            st.preferred[key] = agent_id
+            st.avoid.get(key, set()).discard(agent_id)
+        else:
+            st.preferred.pop(key, None)
+            previous = current.agent_id if current is not None else st.last_agent.get(key)
+            if previous is not None:
+                st.avoid.setdefault(key, set()).add(previous)
+        if current is None:
+            return "preferred"
+        await self._emit(TaskReady(task_id=task.id, task_key=key), correlation_id=task.id)
+        await self._leases.release(lease_key(self.session_id, task.id), current.owner)
+        if current.acked or self.pool.running(current.agent_id):
+            self.pool.recover(current.agent_id, f"task {key} reassigned")
+        self._log.info("task_reassigned", task_key=key, from_agent=current.agent_id)
+        return "requeued"
 
     async def _check_acks(self) -> None:
         now = self._now()
