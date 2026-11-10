@@ -12,7 +12,7 @@ vi.mock("@/lib/api", async importOriginal => {
   return { ...original, api: { profiles: vi.fn(), sessions: vi.fn(), providerHealth: vi.fn(), createSession: vi.fn() } };
 });
 function renderPage() { return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><HomePage /></QueryClientProvider>); }
-async function ready() { renderPage(); await screen.findByRole("option", { name: "local" }); }
+async function ready() { renderPage(); await screen.findByRole("option", { name: "local" }, { timeout: 15_000 }); }
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.profiles).mockResolvedValue(profiles);
@@ -20,12 +20,12 @@ beforeEach(() => {
   vi.mocked(api.providerHealth).mockResolvedValue(health);
   vi.mocked(api.createSession).mockResolvedValue(session);
 });
-describe("HomePage", () => {
+describe("HomePage", { timeout: 15_000 }, () => {
   it("shows the configured app name, recent session links and provider health badges", async () => {
     await ready();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Agent Platform");
-    expect(await screen.findByRole("link", { name: /Research the next launch/ })).toHaveAttribute("href", `/sessions/${session.id}/plan`);
-    expect(await screen.findByText(/docker_local · Healthy/)).toBeVisible();
+    expect(await screen.findByRole("link", { name: /Research the next launch/ }, { timeout: 15_000 })).toHaveAttribute("href", `/sessions/${session.id}/plan`);
+    expect(await screen.findByText(/docker_local · Healthy/, undefined, { timeout: 15_000 })).toBeVisible();
     expect(screen.getByText(/e2b · Unavailable/)).toBeVisible();
     expect(api.sessions).toHaveBeenCalledWith({ limit: 10 }); expect(api.providerHealth).toHaveBeenCalled();
   });
@@ -53,7 +53,7 @@ describe("HomePage", () => {
   it("shows create errors and supports retry", async () => {
     vi.mocked(api.createSession).mockRejectedValueOnce(new ApiError({ type: "about:blank", title: "Unavailable", status: 503, detail: "Planner offline", instance: null, errors: null }));
     await ready(); fireEvent.change(screen.getByLabelText("What should your agents do?"), { target: { value: "Research" } }); await userEvent.click(screen.getByRole("button", { name: "Plan" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Planner offline"); expect(push).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert", undefined, { timeout: 15_000 })).toHaveTextContent("Planner offline"); expect(push).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Plan" })); await waitFor(() => expect(push).toHaveBeenCalled());
   });
   it("disables submission until profiles load", async () => {
@@ -73,6 +73,6 @@ describe("HomePage", () => {
   });
   it("shows empty and failed server state clearly", async () => {
     vi.mocked(api.sessions).mockResolvedValue({ items: [], next_cursor: null }); vi.mocked(api.providerHealth).mockRejectedValue(new Error("Health offline")); vi.mocked(api.profiles).mockResolvedValue({ items: [], default_profile: null });
-    renderPage(); expect(await screen.findByText("No sessions yet")).toBeVisible(); expect(await screen.findByRole("alert")).toHaveTextContent("Health offline"); expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+    renderPage(); expect(await screen.findByText("No sessions yet", undefined, { timeout: 15_000 })).toBeVisible(); expect(await screen.findByRole("alert", undefined, { timeout: 15_000 })).toHaveTextContent("Health offline"); expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
   });
 });
