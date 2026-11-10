@@ -1058,7 +1058,7 @@ class Scheduler:
         tasks = st.tasks
         if (
             st.status == "running"
-            and tasks
+            and st.approved_version in st.proposals
             and all(t.status in FINISHED_TASK_STATUSES for t in tasks.values())
             and not st.completed
         ):

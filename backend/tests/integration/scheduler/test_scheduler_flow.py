@@ -201,3 +201,18 @@ async def test_restart_adopts_agents_and_finishes_the_session() -> None:
     assert len([e for e in events if e.type == "agent.created"]) == 2  # adopted, not re-created
     assert len(provider.specs) == sandboxes_before  # sandboxes reconnected
     assert order_of(events, "task.accepted") == ["T1", "T2"]
+
+
+async def test_approved_empty_plan_completes_once_and_accepts_followups() -> None:
+    w = await open_session(drafts=[], agent_count=1)
+    try:
+        completed = await w.wait_for("session.completed", limit_s=1)
+        assert completed.summary == "0 of 0 tasks done"
+        assert await w.payloads("task.created") == []
+        assert len(await w.payloads("session.completed")) == 1
+        await w.approve([make_task_draft("T1")], 2)
+        await w.wait_for("task.accepted")
+        await w.wait_for("session.completed", lambda p: p.summary == "1 of 1 tasks done")
+        assert len(await w.payloads("session.completed")) == 2
+    finally:
+        await w.stop()
