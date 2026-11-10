@@ -27,7 +27,9 @@ __all__ = [
     "AUTH_EXEMPT_PATHS",
     "BearerAuthMiddleware",
     "BodySizeLimitMiddleware",
+    "OriginCheckMiddleware",
     "RequestContextMiddleware",
+    "origin_allowed",
 ]
 
 log = structlog.get_logger("agentplatform.api.access")
@@ -81,6 +83,45 @@ class RequestContextMiddleware:
                         status=code,
                         duration_ms=round((time.perf_counter() - started) * 1000, 1),
                     )
+
+
+_UNSAFE_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def origin_allowed(origin: str | None, allowed: frozenset[str]) -> bool:
+    """True when there is no ``Origin`` (non-browser client) or it is allowed."""
+    return origin is None or origin.rstrip("/") in allowed
+
+
+class OriginCheckMiddleware:
+    """Rejects state-changing requests that a browser sent from another origin (403).
+
+    CORS only stops a foreign page from *reading* responses; a cross-site form POST is
+    still delivered. Without ``APP_API_TOKEN`` nothing else would stop it, so every
+    unsafe method with an ``Origin`` header must come from ``FRONTEND_ORIGIN``.
+    Requests without ``Origin`` (curl, the eval runner) are unaffected. WebSockets do
+    the same check in ``api/ws.py``.
+    """
+
+    def __init__(self, app: ASGIApp, *, allowed: frozenset[str]) -> None:
+        self.app = app
+        self._allowed = allowed
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in _UNSAFE_METHODS:
+            await self.app(scope, receive, send)
+            return
+        origin = Headers(scope=scope).get("origin")
+        if origin_allowed(origin, self._allowed):
+            await self.app(scope, receive, send)
+            return
+        response = problem_response(
+            403,
+            code="origin_not_allowed",
+            detail="Requests from this origin are not allowed.",
+            instance=scope.get("path"),
+        )
+        await response(scope, receive, send)
 
 
 class BearerAuthMiddleware:

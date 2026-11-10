@@ -4,7 +4,8 @@
 production ones from ``Settings`` in the lifespan and closes them on shutdown.
 
 Middleware, outermost first: request id + access log → CORS (``FRONTEND_ORIGIN``
-only) → bearer auth (when ``APP_API_TOKEN`` is set) → upload size limit → routes.
+only) → origin check for unsafe methods → bearer auth (when ``APP_API_TOKEN`` is
+set) → upload size limit → routes.
 CORS sits outside auth so preflights and 401s carry CORS headers.
 """
 
@@ -23,6 +24,7 @@ from agentplatform.api.metrics import Metrics
 from agentplatform.api.middleware import (
     BearerAuthMiddleware,
     BodySizeLimitMiddleware,
+    OriginCheckMiddleware,
     RequestContextMiddleware,
 )
 from agentplatform.api.problems import install_problem_handlers
@@ -91,6 +93,10 @@ def create_app(deps: ApiDeps | None = None, *, settings: Settings | None = None)
     # add_middleware: the last one added is the outermost.
     app.add_middleware(BodySizeLimitMiddleware, limit=upload_limit)
     app.add_middleware(BearerAuthMiddleware, token=token)
+    origin = resolved.frontend_origin.strip().rstrip("/")
+    app.add_middleware(
+        OriginCheckMiddleware, allowed=frozenset({origin}) if origin else frozenset()
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[resolved.frontend_origin] if resolved.frontend_origin else [],

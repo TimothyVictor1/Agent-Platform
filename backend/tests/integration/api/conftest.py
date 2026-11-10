@@ -201,9 +201,12 @@ class AsgiWebSocket:
     ``WsClosed(code)``; leaving the block disconnects the client.
     """
 
-    def __init__(self, app: FastAPI, path: str, **query: object) -> None:
+    def __init__(
+        self, app: FastAPI, path: str, *, headers: dict[str, str] | None = None, **query: object
+    ) -> None:
         self._app = app
         self._path = path
+        self._headers = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
         self._query = urlencode({k: v for k, v in query.items() if v is not None})
         self._to_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._from_app: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -221,7 +224,7 @@ class AsgiWebSocket:
             "raw_path": self._path.encode(),
             "query_string": self._query.encode(),
             "root_path": "",
-            "headers": [(b"host", b"test")],
+            "headers": [(b"host", b"test"), *self._headers],
             "client": ("127.0.0.1", 50000),
             "server": ("test", 80),
             "subprotocols": [],

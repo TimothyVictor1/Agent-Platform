@@ -3,6 +3,8 @@
 Handshake (the socket is accepted first so the client sees the 4xxx close code; a
 close before accept becomes an HTTP 403 and the browser only reports 1006):
 
+0. ``Origin``: a browser connection from anywhere but ``FRONTEND_ORIGIN`` closes with
+   ``4403`` (terminal). Clients without ``Origin`` are not affected.
 1. Ticket: a presented ticket must be consumed successfully (single use, 60 s, bound
    to this session), otherwise close ``4401``. Without a ticket the connection is
    allowed only when ``APP_API_TOKEN`` is unset (local development).
@@ -41,6 +43,7 @@ import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agentplatform.api.deps import ApiDeps
+from agentplatform.api.middleware import origin_allowed
 from agentplatform.bus.base import BusRecord
 from agentplatform.contracts.api import (
     WS_CLOSE_TICKET_REJECTED,
@@ -51,6 +54,7 @@ from agentplatform.contracts.events import EventEnvelope, Thumbnail
 
 __all__ = [
     "WS_CLOSE_BAD_REQUEST",
+    "WS_CLOSE_ORIGIN_REJECTED",
     "WS_CLOSE_SESSION_NOT_FOUND",
     "WS_CLOSE_TICKET_REJECTED",
     "SessionStream",
@@ -60,6 +64,7 @@ __all__ = [
 log = structlog.get_logger(__name__)
 
 WS_CLOSE_BAD_REQUEST: Final = 4400
+WS_CLOSE_ORIGIN_REJECTED: Final = 4403
 WS_CLOSE_SESSION_NOT_FOUND: Final = 4404
 WS_CLOSE_INTERNAL: Final = 1011
 LIVE_QUEUE_MAX: Final = 10_000
@@ -220,6 +225,11 @@ async def session_socket(websocket: WebSocket, session_id: str) -> None:
     since = _parse_since(websocket.query_params.get("since"))
     await websocket.accept()
 
+    if not origin_allowed(websocket.headers.get("origin"), deps.allowed_origins):
+        # Cross-site WebSocket hijacking: a foreign page must never read the stream.
+        deps.metrics.inc("ws.rejected.origin")
+        await _close(websocket, WS_CLOSE_ORIGIN_REJECTED, "origin not allowed")
+        return
     if ticket is not None:
         allowed = await deps.tickets.consume(ticket, session_id)
     else:

@@ -136,3 +136,20 @@ async def test_unknown_route_and_wrong_method_are_problem_json() -> None:
     assert missing.headers["content-type"] == PROBLEM_CONTENT_TYPE
     assert wrong.status_code == 405
     assert wrong.json()["status"] == 405
+
+
+async def test_cross_origin_state_changes_are_refused_even_without_token() -> None:
+    async def known(session_id: str) -> bool:
+        return True
+
+    app = create_app(build_deps(token=None, session_exists=known))
+    url = "/api/v1/sessions/s-1/ws-ticket"
+    async with client_for(app) as client:
+        evil = await client.post(url, headers={"Origin": "http://evil.example"})
+        assert evil.status_code == 403
+        assert evil.json()["type"].endswith(":origin_not_allowed")
+        own = await client.post(url, headers={"Origin": "http://localhost:3000"})
+        assert own.status_code == 201
+        assert (await client.post(url)).status_code == 201  # non-browser client
+        reads = await client.get("/api/v1/metrics", headers={"Origin": "http://evil.example"})
+        assert reads.status_code == 200  # safe methods are left to CORS

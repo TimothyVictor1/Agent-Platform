@@ -7,7 +7,11 @@ from typing import Any
 
 from agentplatform.api.app import create_app
 from agentplatform.api.tickets import InMemoryTicketStore
-from agentplatform.api.ws import WS_CLOSE_BAD_REQUEST, WS_CLOSE_SESSION_NOT_FOUND
+from agentplatform.api.ws import (
+    WS_CLOSE_BAD_REQUEST,
+    WS_CLOSE_ORIGIN_REJECTED,
+    WS_CLOSE_SESSION_NOT_FOUND,
+)
 from agentplatform.contracts.api import WS_CLOSE_TICKET_REJECTED
 from agentplatform.contracts.common import Actor, utcnow
 from agentplatform.contracts.events import Event, EventDraft, Heartbeat, SessionPaused, Thumbnail
@@ -67,8 +71,12 @@ class World:
                 SID, EventDraft(payload=SessionPaused(reason=f"lost{i}"), actor=Actor.system())
             )
 
-    def socket(self, session_id: str = SID, **query: object) -> AsgiWebSocket:
-        return AsgiWebSocket(self.app, f"/api/v1/ws/sessions/{session_id}", **query)
+    def socket(
+        self, session_id: str = SID, *, headers: dict[str, str] | None = None, **query: object
+    ) -> AsgiWebSocket:
+        return AsgiWebSocket(
+            self.app, f"/api/v1/ws/sessions/{session_id}", headers=headers, **query
+        )
 
 
 async def receive_seqs(ws: AsgiWebSocket, n: int) -> list[int]:
@@ -152,6 +160,15 @@ async def test_bad_since_and_unknown_session_are_terminal_codes() -> None:
         assert await ws.expect_close() == WS_CLOSE_BAD_REQUEST
     async with w.socket("missing") as ws:
         assert await ws.expect_close() == WS_CLOSE_SESSION_NOT_FOUND
+
+
+async def test_foreign_origin_is_rejected_even_without_token() -> None:
+    w = World(token=None)
+    await w.emit(1)
+    async with w.socket(headers={"Origin": "http://evil.example"}) as ws:
+        assert await ws.expect_close() == WS_CLOSE_ORIGIN_REJECTED
+    async with w.socket(headers={"Origin": "http://localhost:3000"}) as ws:
+        assert await receive_seqs(ws, 1) == [1]
 
 
 # --- replay then live -------------------------------------------------------------------

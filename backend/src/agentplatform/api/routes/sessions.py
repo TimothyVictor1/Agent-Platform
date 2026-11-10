@@ -174,6 +174,10 @@ async def list_sessions(
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
 async def get_session(session_id: str, tx: Tx, deps: Deps) -> SessionDetail:
     session = await load_session(tx, session_id)
+    # Read the cursor before the read models: they commit together with their events,
+    # so the snapshot reflects at least every event up to last_seq and a WebSocket
+    # opened with since=last_seq can only re-deliver, never skip.
+    last_seq = await deps.events.last_seq(session_id)
     plan = await PlanRepository(tx).find(session_id)
     tasks = await TaskRepository(tx).list(session_id)
     agents = await AgentRepository(tx).list(session_id)
@@ -186,7 +190,7 @@ async def get_session(session_id: str, tx: Tx, deps: Deps) -> SessionDetail:
         tasks=tasks,
         agents=agents,
         counts=TaskCounts(by_status=by_status, total=len(tasks)),
-        last_seq=await deps.events.last_seq(session_id),
+        last_seq=last_seq,
     )
 
 

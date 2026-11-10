@@ -117,6 +117,12 @@ class ApiDeps:
         return value or None
 
     @property
+    def allowed_origins(self) -> frozenset[str]:
+        """Browser origins allowed to call the API (``FRONTEND_ORIGIN``)."""
+        origin = self.settings.frontend_origin.strip().rstrip("/")
+        return frozenset({origin}) if origin else frozenset()
+
+    @property
     def sandbox_provider_names(self) -> frozenset[SandboxProviderName]:
         names: set[SandboxProviderName] = set()
         for provider in self.sandbox_providers.values():
