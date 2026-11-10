@@ -162,6 +162,14 @@ class RuntimeFactory(Protocol):
     ) -> AgentRuntime: ...
 
 
+MAX_STOP_GRACE_S = 4.0
+"""Upper bound of the grace period of ``stop_all`` without an explicit ``grace_s``
+(user stop, kill switch): the loops get this long, then their runs are cancelled."""
+
+_KEPT_MODES = frozenset({"pause", "takeover"})
+"""Control modes that survive a runtime reinstall (user pause or takeover)."""
+
+
 @dataclass(frozen=True, slots=True)
 class PoolConfig:
     boot_concurrency: int = 3
@@ -173,8 +181,9 @@ class PoolConfig:
     recovery_backoff_s: float = 2.0
     fence_grace_s: float = 5.0
     """How long a fenced run may take to notice its lost lease before it is cancelled."""
-    stop_grace_s: float = 30.0
-    """How long a stopped run may take to exit before it is cancelled."""
+    stop_grace_s: float = MAX_STOP_GRACE_S
+    """How long a stopped run may take to exit before it is cancelled. Capped at
+    ``MAX_STOP_GRACE_S`` so the kill switch stops every agent within 5 s (SPEC §15.2)."""
     dequeue_timeout_s: float = 1.0
     screen: tuple[int, int] = (1280, 800)
     network: Literal["open", "allowlist"] = "open"
@@ -402,13 +411,14 @@ class AgentPool:
 
     async def stop_all(self, grace_s: float | None = None) -> None:
         """Stop every run (control ``stop``) and wait for them; runs still alive
-        after ``grace_s`` are cancelled. No new work is taken afterwards."""
+        after ``grace_s`` (default ``config.stop_grace_s``, at most
+        ``MAX_STOP_GRACE_S``) are cancelled. No new work is taken afterwards."""
         self.stopping = True
         for m in self._members.values():
             m.control.set("stop")
         runs = [m.run for m in self._members.values() if m.run is not None and not m.run.done()]
         if runs:
-            grace = self.config.stop_grace_s if grace_s is None else grace_s
+            grace = min(self.config.stop_grace_s, MAX_STOP_GRACE_S) if grace_s is None else grace_s
             _, pending = await asyncio.wait(runs, timeout=grace)
             for run in pending:
                 run.cancel()
@@ -533,7 +543,9 @@ class AgentPool:
             )
         m.sandbox = sandbox
         m.parked = None
-        m.control.set("run")
+        if m.control.mode not in _KEPT_MODES:
+            # a user pause/takeover outlives the reinstall; the new run waits for release
+            m.control.set("run")
         deps = RuntimeDeps(
             control=m.control,
             budget=self._budget,
