@@ -1184,7 +1184,7 @@ class Supervisor:
         stop_wait = asyncio.create_task(self._stopped.wait())
         get = asyncio.create_task(self._inbox.get())
         try:
-            done, _ = await asyncio.wait(
+            await asyncio.wait(
                 {stop_wait, get}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
             )
         finally:
@@ -1192,13 +1192,15 @@ class Supervisor:
             if not get.done():
                 get.cancel()
             await asyncio.gather(stop_wait, get, return_exceptions=True)
-        if get in done and not get.cancelled():
+        # ``get`` may complete after ``wait`` returned; never drop its event
+        received = get.done() and not get.cancelled() and get.exception() is None
+        if received:
             await self._absorb(get.result())
         while not self._inbox.empty():
             await self._absorb(self._inbox.get_nowait())
         if self._stopped.is_set():
             return
-        if get not in done:
+        if not received:
             await self._catch_up()  # a quiet bus: pick up anything that was missed
         await self._flush_detections()
         await self._check_questions()
