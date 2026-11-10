@@ -1,5 +1,5 @@
-import { SessionPlaceholder } from "@/components/session-placeholder";
+import { LiveSession } from "@/components/live/live-session";
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <SessionPlaceholder key={id} sessionId={id} title="Live session" />;
+  return <LiveSession key={id} sessionId={id} />;
 }
