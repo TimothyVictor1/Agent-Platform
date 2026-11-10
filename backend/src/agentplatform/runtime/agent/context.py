@@ -303,6 +303,23 @@ class _Trim:
     digest: str
 
 
+_RULES_HEADING = "## Rules"
+
+
+def _with_extra_rules(text: str, extra: str) -> str:
+    """Append ``extra`` (e.g. the session's policy rules, T18) to the end of the
+    ``## Rules`` section; without that section it becomes its own section."""
+    if not extra:
+        return text
+    start = text.find(_RULES_HEADING)
+    if start < 0:
+        return f"{text}\n\n{_RULES_HEADING}\n{extra}"
+    nxt = text.find("\n## ", start + len(_RULES_HEADING))
+    if nxt < 0:
+        return f"{text.rstrip()}\n{extra}"
+    return f"{text[:nxt].rstrip()}\n{extra}\n{text[nxt:]}"
+
+
 class ContextBuilder:
     """Builds the messages of every step of one task. Not shared between tasks."""
 
@@ -320,8 +337,10 @@ class ContextBuilder:
         settings: ContextSettings | None = None,
         summarizer: Summarizer | None = None,
         template: Template | None = None,
+        extra_rules: str = "",
     ) -> None:
         self.settings = settings or ContextSettings()
+        self._extra_rules = extra_rules.strip()
         self._agent_name = agent_name
         self._team_size = team_size
         self._task = task
@@ -380,7 +399,7 @@ class ContextBuilder:
         artifacts = [
             f"{a.id}: {a.name} ({a.mime}, {a.size_bytes} bytes)" for a in self._upstream.artifacts
         ]
-        return self._template.substitute(
+        text = self._template.substitute(
             agent_name=self._agent_name,
             team_size=self._team_size,
             roster=_bullets(roster),
@@ -397,6 +416,7 @@ class ContextBuilder:
             shot_height=self._shot[1],
             coordinate_help=_coordinate_help(self._mode, self._shot),
         ).strip()
+        return _with_extra_rules(text, self._extra_rules)
 
     # -- per step -------------------------------------------------------------------
 

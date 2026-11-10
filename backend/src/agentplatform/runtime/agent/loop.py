@@ -564,6 +564,7 @@ class AgentRuntime:
         summarizer: Summarizer | None = None,
         fallback_parser: FallbackParser | None = None,
         renew_lease: LeaseRenewer | None = None,
+        extra_rules: str = "",
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -587,6 +588,7 @@ class AgentRuntime:
         self._summarizer = summarizer
         self._fallback = fallback_parser
         self._renew_lease = renew_lease
+        self._extra_rules = extra_rules
         self._clock = clock
         self._sleep_fn = sleep
         self._actor = Actor.agent(agent.id, agent.name)
@@ -613,6 +615,7 @@ class AgentRuntime:
             max_steps=self.session.budgets.max_steps_per_task,
             settings=cfg.context,
             summarizer=self._summarizer,
+            extra_rules=self._extra_rules,
         )
         run = _TaskRun(
             task=task, builder=builder, detector=StuckDetector(cfg.stuck), started=self._clock()
