@@ -13,7 +13,7 @@ from agentplatform.contracts.model_io import ModelResponse
 from agentplatform.contracts.plan import PlanProposal, validate_plan
 from agentplatform.contracts.task import TaskDraft
 from agentplatform.errors import InvalidRequestError, ModelError, PlannerError
-from agentplatform.runtime.planner import EXTEND_MAX_TOTAL_TASKS, Planner, PlannerSettings
+from agentplatform.runtime.planner import Planner, PlannerSettings
 from agentplatform.testing.builders import make_plan, make_task_draft, make_tasks
 from agentplatform.testing.fake_model import FakeModel, RecordedCall, text_response
 
@@ -306,7 +306,7 @@ async def test_extend_keeps_existing_tasks_and_appends_new_ones() -> None:
     text = user_text(model.calls[0])
     assert '"status": "done"' in text
     assert "starting at T5" in text
-    assert "at most 8" in text
+    assert "Add at most 12 tasks." in text
 
 
 async def test_extend_ignores_existing_tasks_echoed_by_the_model() -> None:
@@ -363,27 +363,53 @@ async def test_extend_with_no_new_tasks_fails() -> None:
     assert [e["code"] for e in info.value.errors] == ["no_new_tasks"]
 
 
-async def test_extend_merged_plan_is_capped() -> None:
-    plan = make_plan()  # 4 tasks: room for 8
-    nine = [make_task_draft(f"N{i}") for i in range(9)]
-    planner, model = planner_with(reply(nine), reply(nine[:8]))
+async def test_follow_up_can_add_twelve_tasks_to_a_ten_task_plan() -> None:
+    plan = PlanProposal(tasks=make_tasks({f"T{i}": [] for i in range(1, 11)}))
+    new = [make_task_draft(f"N{i:02d}") for i in range(1, 12)]  # N01..N11, independent
+    new.append(make_task_draft("last", depends_on=["T10"], inputs=[("T10", "result")]))
+    planner, model = planner_with(reply(new))
+
+    revision = await planner.extend(
+        plan, "Add twelve tasks", statuses={f"T{i}": "done" for i in range(1, 11)}
+    )
+
+    tasks = revision.proposal.tasks
+    assert len(tasks) == 22
+    assert tasks[:10] == plan.tasks  # unchanged, field for field
+    assert [t.key for t in tasks[10:]] == [f"T{i}" for i in range(11, 23)]
+    assert tasks[-1].depends_on == ["T10"]
+    assert tasks[-1].inputs[0].from_task == "T10"
+    assert validate_plan(tasks, max_tasks=22) == []
+    assert [t.key for t in revision.diff.added] == [f"T{i}" for i in range(11, 23)]
+    assert revision.diff.removed == []
+    assert revision.diff.changed == []
+    text = user_text(model.calls[0])
+    assert "Add at most 12 tasks." in text
+    assert "starting at T11" in text
+    assert len(model.calls) == 1
+
+
+async def test_follow_up_capped_at_twelve_new_tasks() -> None:
+    plan = PlanProposal(tasks=make_tasks({f"T{i}": [] for i in range(1, 11)}))
+    thirteen = [make_task_draft(f"N{i:02d}") for i in range(1, 14)]
+    planner, model = planner_with(reply(thirteen), reply(thirteen[:12]))
 
     revision = await planner.extend(plan, "Many more", statuses=DONE)
 
-    assert len(revision.proposal.tasks) == EXTEND_MAX_TOTAL_TASKS
-    assert "[too_many_tasks] The plan has 13 tasks" in user_text(model.calls[1])
+    assert len(revision.proposal.tasks) == 22
+    assert "[too_many_tasks] The plan has 23 tasks; the maximum is 22." in user_text(model.calls[1])
 
 
-async def test_extend_full_plan_fails_without_a_model_call() -> None:
+async def test_full_plan_still_takes_a_follow_up() -> None:
     full = PlanProposal(tasks=make_tasks({f"T{i}": [] for i in range(1, 13)}))
-    planner, model = planner_with()
+    planner, model = planner_with(reply([make_task_draft("N1")]))
 
-    with pytest.raises(PlannerError) as info:
-        await planner.extend(full, "One more")
+    revision = await planner.extend(full, "One more")
 
-    assert model.calls == []
-    assert info.value.errors is not None
-    assert info.value.errors[0]["code"] == "too_many_tasks"
+    assert [t.key for t in revision.proposal.tasks[12:]] == ["T13"]
+    assert len(revision.proposal.tasks) == 13
+    assert validate_plan(revision.proposal.tasks, max_tasks=24) == []
+    assert len(model.calls) == 1
 
 
 async def test_repair_error_list_is_capped() -> None:

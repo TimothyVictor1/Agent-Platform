@@ -20,12 +20,15 @@ Keys are normalised after validation:
 The agent count is passed to the model as a parallelism hint only; nothing here adds
 or splits tasks to match it.
 
-Planner-only error codes (not in ``contracts.plan.PlanErrorCode``): see
-``PlannerErrorCode``.
+All error codes come from ``contracts.plan.PlanErrorCode``; the planner-only ones
+(``invalid_json`` … ``no_new_tasks``) are listed there. ``PlannerErrorCode`` only
+remains as a deprecated alias for imports that still refer to it.
 
 Model errors (``ModelError``/``ModelTimeoutError``) propagate unchanged; the retry
 wrapper around the client has already run. Logs carry counts, keys and error codes,
-never prompt or reply text.
+never prompt or reply text. The planner emits no bus events; the runtime that runs it
+(T13) sets ``causation_id`` on the ``session.plan_proposed``/``session.planning_failed``
+events its results lead to.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
-from typing import Any, Final, Literal
+from typing import Any, Final
 
 import structlog
 from pydantic import ValidationError
@@ -48,6 +51,7 @@ from agentplatform.contracts.plan import (
     FieldChange,
     PlanDiff,
     PlanError,
+    PlanErrorCode,
     PlanProposal,
     TaskChange,
     topological_order,
@@ -59,7 +63,6 @@ from agentplatform.models.base import ModelClient
 
 __all__ = [
     "ALL_TOOLS",
-    "EXTEND_MAX_TOTAL_TASKS",
     "MAX_QUESTIONS",
     "PROMPTS_DIR",
     "PlanRevision",
@@ -81,12 +84,6 @@ ALL_TOOLS: Final[tuple[SuggestedTool, ...]] = ("browser", "terminal", "office", 
 MAX_QUESTIONS: Final = 3
 """``questions_for_user`` longer than this are trimmed (and logged), not repaired."""
 
-EXTEND_MAX_TOTAL_TASKS: Final = MAX_TASKS
-"""Cap on the merged plan after ``extend``. Today ``validate_plan`` enforces
-``MAX_TASKS`` on the whole plan, so follow-ups share the 12-task budget. Once
-``validate_plan`` accepts a limit (contracts patch), change this one line to allow up
-to ``MAX_TASKS`` *new* tasks per follow-up."""
-
 MAX_EXTRACT_CHARS: Final = 100_000
 """Replies longer than this are rejected before scanning (bounds the work)."""
 
@@ -95,15 +92,11 @@ MAX_EXTRACT_ATTEMPTS: Final = 50
 
 UNUSABLE_DEPENDENCY_STATUSES: Final[frozenset[TaskStatus]] = frozenset({"failed", "cancelled"})
 
-PlannerErrorCode = Literal[
-    "invalid_json",  # no JSON object could be extracted from the reply
-    "invalid_plan",  # top-level field of the proposal failed Pydantic validation
-    "invalid_task",  # a task failed Pydantic validation
-    "key_collision",  # extend: a new task reuses an existing task's key
-    "depends_on_unusable_task",  # extend: a new task depends on a failed/cancelled task
-    "no_new_tasks",  # extend: the reply added no tasks
-]
-"""Codes the planner adds on top of ``PlanErrorCode`` in ``PlannerError.errors``."""
+type PlannerErrorCode = PlanErrorCode
+"""Deprecated type alias: the planner's error codes are exactly
+``contracts.plan.PlanErrorCode`` (the planner-only members are listed there). The
+alias is kept only so that ``tests/unit/contracts/test_plan_max_tasks.py`` keeps
+importing this name; delete it together with that test."""
 
 _DATA_TAGS: Final = (
     "user_request",
@@ -145,7 +138,7 @@ class PlanRevision:
 class _Issue:
     """One problem with a reply; same shape as ``PlanError``."""
 
-    code: str
+    code: PlanErrorCode
     message: str
     task_key: str | None = None
     field: str | None = None
@@ -495,24 +488,18 @@ class Planner:
     ) -> PlanRevision:
         """Existing tasks (unchanged, copied from ``plan``) followed by new tasks for
         ``follow_up``. New tasks may depend on existing ones except those whose status
-        in ``statuses`` is ``failed``/``cancelled``. The merged plan is capped at
-        ``EXTEND_MAX_TOTAL_TASKS``."""
+        in ``statuses`` is ``failed``/``cancelled``. A follow-up may add up to
+        ``MAX_TASKS`` new tasks; the merged plan is validated with
+        ``max_tasks=len(existing) + MAX_TASKS`` (SPEC §11.4), so it may exceed the
+        default 12-task cap."""
         _require_text(follow_up, "follow_up")
         blog = _bind(session_id, mode="extend")
         statuses = statuses or {}
         existing = list(plan.tasks)
         existing_by_key = {t.key: t for t in existing}
-        room = EXTEND_MAX_TOTAL_TASKS - len(existing)
-        if room <= 0:
-            issue = _Issue(
-                code="too_many_tasks",
-                message=(
-                    f"The plan already has {len(existing)} tasks; a follow-up cannot add "
-                    f"more (the maximum is {EXTEND_MAX_TOTAL_TASKS})."
-                ),
-            )
-            blog.warning("planner_plan_full", task_count=len(existing))
-            raise PlannerError(issue.message, errors=[issue.as_dict()])
+        # Each follow-up may add up to MAX_TASKS new tasks (SPEC §11.4); the merged
+        # plan is intentionally allowed to grow past the default MAX_TASKS cap.
+        max_tasks = len(existing) + MAX_TASKS
         first = next_key_number(existing)
         existing_json = [
             {
@@ -525,7 +512,7 @@ class Planner:
         user = self._prompts.extend.substitute(
             existing_json=_as_data(json.dumps(existing_json, indent=2)),
             follow_up=_as_data(follow_up.strip()),
-            max_new=room,
+            max_new=MAX_TASKS,
             first_key=f"T{first}",
             **_common_vars(agent_count_hint, tools, constraints),
         )
@@ -569,7 +556,7 @@ class Planner:
                         )
             if issues:
                 return issues
-            errors = validate_plan([*existing, *new])
+            errors = validate_plan([*existing, *new], max_tasks=max_tasks)
             if errors:
                 return [_Issue.from_plan_error(e) for e in errors]
             renamed = normalize_keys(new, keep=existing_by_key, start=first)
