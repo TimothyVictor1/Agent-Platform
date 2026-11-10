@@ -51,6 +51,18 @@ def check_coords(x: int, y: int) -> None:
         )
 
 
+def _move_if_needed(x: int, y: int) -> None:
+    # --sync waits for a motion event that never arrives at the current position.
+    position = dict(
+        line.split("=", 1)
+        for line in run_xdotool("getmouselocation", "--shell").splitlines()
+        if "=" in line
+    )
+    if position.get("X") == str(x) and position.get("Y") == str(y):
+        return
+    run_xdotool("mousemove", "--sync", str(x), str(y))
+
+
 def click(x: int, y: int, button: str = "left", count: int = 1) -> None:
     check_coords(x, y)
     code = BUTTONS.get(button)
@@ -58,13 +70,13 @@ def click(x: int, y: int, button: str = "left", count: int = 1) -> None:
         raise ValueError(f"unknown button {button!r}, expected one of {sorted(BUTTONS)}")
     if not 1 <= count <= MAX_CLICK_COUNT:
         raise ValueError(f"click count must be 1..{MAX_CLICK_COUNT}")
-    run_xdotool("mousemove", "--sync", str(x), str(y))
+    _move_if_needed(x, y)
     run_xdotool("click", "--repeat", str(count), "--delay", "60", str(code))
 
 
 def move(x: int, y: int) -> None:
     check_coords(x, y)
-    run_xdotool("mousemove", "--sync", str(x), str(y))
+    _move_if_needed(x, y)
 
 
 def drag(x1: int, y1: int, x2: int, y2: int) -> None:
@@ -76,7 +88,7 @@ def drag(x1: int, y1: int, x2: int, y2: int) -> None:
             frac = step / DRAG_STEPS
             xs = round(x1 + (x2 - x1) * frac)
             ys = round(y1 + (y2 - y1) * frac)
-            run_xdotool("mousemove", "--sync", str(xs), str(ys))
+            _move_if_needed(xs, ys)
     finally:
         run_xdotool("mouseup", "1")
 
@@ -90,7 +102,7 @@ def scroll(x: int, y: int, direction: str = "down", amount: int = 3) -> None:
         )
     if not MIN_SCROLL_AMOUNT <= amount <= MAX_SCROLL_AMOUNT:
         raise ValueError(f"scroll amount must be in {MIN_SCROLL_AMOUNT}..{MAX_SCROLL_AMOUNT}")
-    run_xdotool("mousemove", "--sync", str(x), str(y))
+    _move_if_needed(x, y)
     run_xdotool("click", "--repeat", str(amount), "--delay", "40", str(code))
 
 

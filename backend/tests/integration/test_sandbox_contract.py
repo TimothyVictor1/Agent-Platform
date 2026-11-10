@@ -14,12 +14,14 @@ text must reach an editor) are skipped for the fake.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import io
 import shlex
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -307,27 +309,55 @@ async def test_type_into_editor_with_key_combos(
     await shared.run_command("pkill -x mousepad >/dev/null 2>&1 || true")
 
 
-async def test_pointer_action_at_current_position_is_prompt(
-    target: Target, shared: SandboxHandle, request: pytest.FixtureRequest
-) -> None:
+async def test_pointer_action_at_current_position_is_prompt(shared: SandboxHandle) -> None:
     """Clicking the same spot twice is common for agents and must not stall."""
-    if target.name == "docker_local":
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                raises=SandboxError,
-                reason=(
-                    "T01 bug: control/input.py runs `xdotool mousemove --sync`, which "
-                    "stalls ~20 s when the pointer is already at the target"
-                ),
-            )
-        )
     await shared.move(200, 210)
     started = time.monotonic()
     await shared.move(200, 210)
     await shared.click(200, 210)
     if time.monotonic() - started > 5:
         raise SandboxError("pointer action at the current position took longer than 5 s")
+
+
+@pytest.mark.parametrize("verb", ["move", "click", "scroll", "drag"])
+@pytest.mark.parametrize("position", [(200, 210), (201, 210), (200, 211)])
+async def test_control_pointer_skips_only_redundant_moves(
+    monkeypatch: pytest.MonkeyPatch, verb: str, position: tuple[int, int]
+) -> None:
+    """Exercise the actual control code without requiring an X server or Docker."""
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[3] / "sandbox-image"))
+    control = importlib.import_module("control.input")
+    calls: list[tuple[str, ...]] = []
+    current = position
+
+    def xdotool(*args: str) -> str:
+        nonlocal current
+        calls.append(args)
+        if args == ("getmouselocation", "--shell"):
+            return f"X={current[0]}\nY={current[1]}\nSCREEN=0\nWINDOW=123\n"
+        if args[:2] == ("mousemove", "--sync"):
+            destination = (int(args[2]), int(args[3]))
+            assert destination != current, "redundant --sync move would stall"
+            current = destination
+        return ""
+
+    monkeypatch.setattr(control, "run_xdotool", xdotool)
+    if verb == "drag":
+        # A short drag rounds several intermediate steps to the same pixel.
+        control.drag(200, 210, 201, 211)
+        assert calls[0] == ("mousedown", "1")
+        assert calls[-1] == ("mouseup", "1")
+        assert current == (201, 211)
+    else:
+        getattr(control, verb)(200, 210)
+        assert calls[0] == ("getmouselocation", "--shell")
+        assert current == (200, 210)
+        moves = [call for call in calls if call[0] == "mousemove"]
+        assert len(moves) == (0 if position == (200, 210) else 1)
+        if verb == "click":
+            assert calls[-1] == ("click", "--repeat", "1", "--delay", "60", "1")
+        elif verb == "scroll":
+            assert calls[-1] == ("click", "--repeat", "3", "--delay", "40", "5")
 
 
 # --- lifecycle ----------------------------------------------------------------------
