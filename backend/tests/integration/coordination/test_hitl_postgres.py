@@ -18,6 +18,7 @@ from agentplatform.eventing import EventRecorder
 from agentplatform.runtime.coordination.digest import DigestBuilder, postgres_task_lister
 from agentplatform.runtime.coordination.postgres_board import PostgresBoardService
 from agentplatform.runtime.hitl import HitlApprovalGate, HitlController, PostgresApprovalStore
+from agentplatform.runtime.supervisor import SupervisorView, detect_triggers
 from agentplatform.testing import make_task
 
 from .conftest import World
@@ -73,6 +74,7 @@ async def test_steer_reaches_only_the_target_agents_digest_first(
     assert brook.text.index("Check the annual plan too.") < brook.text.index("Prices are in EUR")
     assert "Check the annual plan too." not in ada.text
     assert "Check the annual plan too." not in cleo.text
+    assert entry is not None
     assert entry.to == [world.brook.id]
 
 
@@ -90,9 +92,15 @@ async def test_broadcast_steer_reaches_everyone(
     for agent in (world.ada, world.brook, world.cleo):
         digest = await digests.build(agent, task, since=0, budget_tokens=700)
         assert "Wrap up in 5 minutes." in digest.text
+    assert entry is not None
     events = await store.read(world.id, 0, 500)
-    triggers = [e.payload for e in events if e.type == "supervisor.triggered"]
-    assert [t.entry_ids for t in triggers] == [[entry.id]]
+    assert [e for e in events if e.type == "supervisor.triggered"] == []  # none from T18
+    view = SupervisorView.for_session(world.session)
+    triggers = []
+    for event in events:
+        view.apply(event)
+        triggers.extend(detect_triggers(event, view))
+    assert [(t.reason, t.entry_ids) for t in triggers] == [("user_message", [entry.id])]
 
 
 async def test_approval_rows_follow_the_events(

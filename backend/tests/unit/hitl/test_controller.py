@@ -27,7 +27,7 @@ from agentplatform.errors import (
 )
 from agentplatform.eventing import EventRecorder
 from agentplatform.runtime.agent.loop import AgentRuntime, AgentRuntimeConfig, LocalControlState
-from agentplatform.runtime.hitl import HitlController
+from agentplatform.runtime.hitl import STEER_NOTE_PREFIX, HitlController
 from agentplatform.testing import (
     FakeModel,
     FakeSandbox,
@@ -39,7 +39,7 @@ from agentplatform.testing import (
 )
 from agentplatform.testing.images import make_png
 
-from .fakes import until, until_async
+from .fakes import FakeNotes, supervisor_triggers, until, until_async
 
 USER = Actor.user("u1", "Tim")
 RESUME_NOTE = "The user interacted with your screen. Re-observe carefully before acting."
@@ -80,6 +80,7 @@ async def test_steer_reaches_only_the_target_agent(aw: Any) -> None:
     session = make_session(agent_count=3)
     ctrl = _controller(aw, session, agent_ids=lambda: ["a1", "a2", "a3"])
     entry = await ctrl.steer("a2", "Use the EU price list, not the US one.", by=USER)
+    assert entry is not None
     assert entry.to == ["a2"]
     assert entry.kind == "note"
     assert entry.author == USER
@@ -89,20 +90,71 @@ async def test_steer_reaches_only_the_target_agent(aw: Any) -> None:
     assert aw.board.visible_to("a3") == []
     (steer,) = await aw.payloads(session.id, "user.steer")
     assert (steer.agent_id, steer.entry_id) == ("a2", entry.id)
-    assert await aw.payloads(session.id, "supervisor.triggered") == []
+    assert await supervisor_triggers(aw.store, session) == []
 
 
-async def test_steer_to_all_reaches_everyone_and_triggers_the_supervisor(aw: Any) -> None:
+async def test_broadcast_steer_triggers_the_supervisor_exactly_once(aw: Any) -> None:
     session = make_session(agent_count=2)
     ctrl = _controller(aw, session, agent_ids=lambda: ["a1", "a2"])
     entry = await ctrl.steer(None, "Stop researching; write the report now.", by=USER)
+    assert entry is not None
     assert entry.to is None
     assert aw.board.visible_to("a1") == aw.board.visible_to("a2") == [entry]
     (steer,) = await aw.payloads(session.id, "user.steer")
     assert steer.agent_id is None
-    (trigger,) = await aw.payloads(session.id, "supervisor.triggered")
+    assert await aw.payloads(session.id, "supervisor.triggered") == []  # none emitted by T18
+    (trigger,) = await supervisor_triggers(aw.store, session)  # T17's detection
     assert trigger.reason == "user_message"
     assert trigger.entry_ids == [entry.id]
+
+
+async def test_isolated_steer_goes_through_the_note_channel(aw: Any) -> None:
+    session = make_session(mode="parallel_isolated", agent_count=3)
+    ctrl = _controller(aw, session, board=None)
+    sinks = {f"a{i}": FakeNotes() for i in range(1, 3)}
+    for agent_id, sink in sinks.items():
+        ctrl.bind_control(agent_id, LocalControlState(), sink)
+    assert await ctrl.steer("a2", "Use the EU\nprice list.", by=USER) is None
+    assert sinks["a2"].notes == [STEER_NOTE_PREFIX + "Use the EU price list."]
+    assert sinks["a1"].notes == []
+    (steer,) = await aw.payloads(session.id, "user.steer")
+    assert (steer.agent_id, steer.entry_id) == ("a2", None)
+    assert await supervisor_triggers(aw.store, session) == []
+
+    assert await ctrl.steer(None, "Wrap up now.", by=USER) is None
+    assert all(s.notes[-1] == STEER_NOTE_PREFIX + "Wrap up now." for s in sinks.values())
+    (trigger,) = await supervisor_triggers(aw.store, session)  # exactly one, from T17
+    assert trigger.reason == "user_message"
+    # refused only when no control is bound for the agent
+    with pytest.raises(NotFoundError):
+        await ctrl.steer("a3", "hi", by=USER)
+    with pytest.raises(NotFoundError):
+        await _controller(aw, session, board=None).steer(None, "hi", by=USER)
+    assert aw.board.entries == []
+
+
+async def test_isolated_steer_reaches_an_idle_agents_next_task(aw: Any) -> None:
+    session = make_session(mode="parallel_isolated", agent_count=1)
+    agent = make_agent(0, session_id=session.id)
+    model = FakeModel(default=tool_response("fail_task", reason="done"))
+    control = LocalControlState()
+    runtime = AgentRuntime(
+        session=session,
+        agent=agent,
+        sandbox=FakeSandbox(),
+        model=model,
+        events=EventRecorder(aw.store, aw.bus),
+        bus=aw.bus,
+        frames=InMemoryArtifactStore(),
+        config=AgentRuntimeConfig(error_backoff_s=0.0),
+        control=control,
+    )
+    ctrl = _controller(aw, session, board=None)
+    ctrl.bind_control(agent.id, control, runtime)
+    await ctrl.steer(agent.id, "Only compare EU vendors.", by=USER)  # agent is idle
+    await runtime.run_task(make_task(session_id=session.id))
+    users = [m for m in model.calls[0].request.messages if m.role == "user"]
+    assert f"[system note] {STEER_NOTE_PREFIX}Only compare EU vendors." in users[-1].text_content()
 
 
 async def test_long_steering_text_keeps_the_full_body(aw: Any) -> None:
@@ -110,6 +162,7 @@ async def test_long_steering_text_keeps_the_full_body(aw: Any) -> None:
     ctrl = _controller(aw, session, agent_ids=lambda: ["a1"])
     text = "Please " + "check every vendor carefully " * 10
     entry = await ctrl.steer("a1", text, by=USER)
+    assert entry is not None
     assert len(entry.title) <= 120
     assert entry.body == text.strip()
 
@@ -119,9 +172,6 @@ async def test_steer_errors(aw: Any) -> None:
     ctrl = _controller(aw, session, agent_ids=lambda: ["a1"])
     with pytest.raises(NotFoundError):
         await ctrl.steer("ghost", "hi", by=USER)
-    isolated = _controller(aw, make_session(mode="parallel_isolated"), agent_ids=lambda: ["a1"])
-    with pytest.raises(NotSupportedError):
-        await isolated.steer("a1", "hi", by=USER)
     no_board = _controller(aw, session, board=None)
     with pytest.raises(NotSupportedError):
         await no_board.steer(None, "hi", by=USER)
@@ -153,7 +203,7 @@ async def test_takeover_pauses_the_loop_and_release_resumes_it(aw: Any) -> None:
         control=control,
     )
     ctrl = _controller(aw, session)
-    ctrl.bind_control(agent.id, control)
+    ctrl.bind_control(agent.id, control, runtime)
     run = asyncio.create_task(runtime.run_task(make_task(session_id=session.id)))
     try:
         await until(lambda: len(sandbox.actions) >= 2)
@@ -194,7 +244,7 @@ async def test_takeover_of_unknown_or_stopped_agent(aw: Any) -> None:
     with pytest.raises(NotFoundError):
         await ctrl.takeover("ghost", by=USER)
     control = LocalControlState("stop")
-    ctrl.bind_control("a1", control)
+    ctrl.bind_control("a1", control, FakeNotes())
     with pytest.raises(ConflictError, match="stopped"):
         await ctrl.takeover("a1", by=USER)
 
@@ -207,7 +257,7 @@ async def test_handle_routes_commands(aw: Any) -> None:
     scheduler = FakeScheduler()
     ctrl = _controller(aw, session, scheduler=scheduler, agent_ids=lambda: ["a1"])
     control = LocalControlState()
-    ctrl.bind_control("a1", control)
+    ctrl.bind_control("a1", control, FakeNotes())
     assert await ctrl.handle(_cmd(SteerCommand, session, agent_id="a1", text="hi"))
     assert await ctrl.handle(_cmd(TakeoverAgentCommand, session, agent_id="a1"))
     modes = [control.mode]
@@ -248,7 +298,7 @@ async def test_kill_switch_stops_every_control_expires_approvals_and_flushes(aw:
     ctrl = _controller(aw, session, scheduler=scheduler, replay=replay)
     controls = [LocalControlState(), LocalControlState("takeover")]
     for i, c in enumerate(controls):
-        ctrl.bind_control(f"a{i}", c)
+        ctrl.bind_control(f"a{i}", c, FakeNotes())
     req = asyncio.create_task(
         ctrl._gate.request(
             session_id=session.id,
@@ -269,7 +319,7 @@ async def test_kill_switch_stops_every_control_expires_approvals_and_flushes(aw:
     assert scheduler.stops == [("user", "stopped by the user")]
     assert replay.flushed == [session.id]
     late = LocalControlState()
-    ctrl.bind_control("a9", late)  # an agent booting during the stop
+    ctrl.bind_control("a9", late, FakeNotes())  # an agent booting during the stop
     assert late.mode == "stop"
     with pytest.raises(ConflictError, match="stopping"):
         await ctrl.takeover("a0", by=USER)
@@ -301,7 +351,7 @@ async def test_kill_switch_interrupts_a_slow_model_call_quickly(aw: Any) -> None
         control=control,
     )
     ctrl = _controller(aw, session)
-    ctrl.bind_control(agent.id, control)
+    ctrl.bind_control(agent.id, control, runtime)
     run = asyncio.create_task(runtime.run_task(make_task(session_id=session.id)))
     await until(lambda: len(model.calls) == 1)
     t0 = time.monotonic()

@@ -62,7 +62,7 @@ async def test_kill_switch_stops_everything_within_5_seconds() -> None:
         assert len(w.runtimes) == 3
         for runtime in w.runtimes:
             assert isinstance(runtime.control, LocalControlState)
-            ctrl.bind_control(runtime.agent.id, runtime.control)
+            ctrl.bind_control(runtime.agent.id, runtime.control, runtime)
         approval = asyncio.create_task(
             gate.request(
                 session_id=w.session.id,

@@ -39,7 +39,7 @@ async def aw() -> Any:
     store, bus = InMemoryEventStore(), InMemoryBus()
     recorder = EventRecorder(store, bus)
     approvals = InMemoryApprovalStore()
-    board = FakeBoard()
+    board = FakeBoard(recorder)
     gates: list[HitlApprovalGate] = []
 
     def make_gate(**kw: Any) -> HitlApprovalGate:

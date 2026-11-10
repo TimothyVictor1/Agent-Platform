@@ -24,8 +24,10 @@ kill switch.
 ``HitlController`` executes the user's commands for one session:
 
 * steering (``command.steer``): a board note from the user to one agent or to all,
-  shown first in the digest (``post_user_steering``), plus ``user.steer``; when
-  addressed to all, also ``supervisor.triggered(user_message)``;
+  shown first in the digest (``post_user_steering``), plus ``user.steer``. In
+  ``parallel_isolated`` (no digest) it is a system note in the agent's next step
+  instead (``AgentRuntime.add_note``). The supervisor (T17) detects a broadcast
+  itself, so no ``supervisor.triggered`` is emitted here;
 * takeover/release: the agent's ``ControlState`` goes to ``takeover`` (the loop
   stops stepping, status ``paused_by_user``) and back to ``run`` (the loop adds the
   "re-observe" note), with ``user.takeover_started``/``user.takeover_ended``;
@@ -35,8 +37,9 @@ kill switch.
   the sandboxes (the pool cancels runs that ignore the stop after 4 s), and the
   replay index is flushed. The target is 5 s.
 
-The runtime wiring (T13) binds each agent's control (``RuntimeDeps.control``) with
-``bind_control`` inside the ``RuntimeFactory`` and routes commands to ``handle``.
+The runtime wiring (T13) binds each agent's control (``RuntimeDeps.control``) and
+note channel (the ``AgentRuntime``) with ``bind_control`` inside the
+``RuntimeFactory`` and routes commands to ``handle``.
 """
 
 from __future__ import annotations
@@ -67,7 +70,6 @@ from agentplatform.contracts.events import (
     Event,
     EventDraft,
     EventPayload,
-    SupervisorTriggered,
     UserSteer,
     UserTakeoverEnded,
     UserTakeoverStarted,
@@ -88,12 +90,14 @@ from agentplatform.runtime.coordination.posting import message_agent, post_user_
 
 __all__ = [
     "APPROVAL_TTL_S",
+    "STEER_NOTE_PREFIX",
     "STOP_DEADLINE_S",
     "ApprovalEventSink",
     "ApprovalStore",
     "HitlApprovalGate",
     "HitlController",
     "InMemoryApprovalStore",
+    "NoteSink",
     "PostgresApprovalStore",
     "ReplayFlusher",
     "SessionStopper",
@@ -106,7 +110,7 @@ log = structlog.get_logger(__name__)
 
 APPROVAL_TTL_S = 15 * 60.0
 STOP_DEADLINE_S = 5.0
-_DETAIL_CHARS = 300
+STEER_NOTE_PREFIX = "Message from the user (an instruction for you): "
 
 
 # -- interfaces ---------------------------------------------------------------------------
@@ -148,6 +152,12 @@ class SettableControl(ControlState, Protocol):
     """A ``ControlState`` the user can change (``LocalControlState``)."""
 
     def set(self, mode: ControlMode) -> None: ...
+
+
+class NoteSink(Protocol):
+    """``AgentRuntime.add_note``: a system note in the agent's next step."""
+
+    def add_note(self, text: str) -> None: ...
 
 
 class SessionStopper(Protocol):
@@ -574,6 +584,7 @@ class HitlController:
         self._deadline_s = stop_deadline_s
         self._monotonic = monotonic
         self._controls: dict[str, SettableControl] = {}
+        self._notes: dict[str, NoteSink] = {}
         self._lock = asyncio.Lock()
         self._stop: asyncio.Task[StopReport] | None = None
         self._log = log.bind(session_id=session.id)
@@ -584,10 +595,12 @@ class HitlController:
 
     # -- wiring -----------------------------------------------------------------------
 
-    def bind_control(self, agent_id: str, control: SettableControl) -> None:
-        """Register an agent's control state (call from the ``RuntimeFactory`` with
-        ``RuntimeDeps.control``). A stopped session stops new controls at once."""
+    def bind_control(self, agent_id: str, control: SettableControl, notes: NoteSink) -> None:
+        """Register an agent's control state and note channel (call from the
+        ``RuntimeFactory`` with ``RuntimeDeps.control`` and the new ``AgentRuntime``).
+        A stopped session stops new controls at once."""
         self._controls[agent_id] = control
+        self._notes[agent_id] = notes
         if self._stop is not None:
             control.set("stop")
 
@@ -621,39 +634,63 @@ class HitlController:
             return False
         return True
 
-    async def steer(self, agent_id: str | None, text: str, *, by: Actor) -> BoardEntry:
-        """A user steering note to ``agent_id`` (or all agents and the supervisor)."""
-        if self.session.mode == "parallel_isolated":
-            raise NotSupportedError(
-                "steering is not available in parallel_isolated mode (agents get no digest)"
-            )
-        if self._board is None:
-            raise NotSupportedError("steering needs the board")
+    async def steer(self, agent_id: str | None, text: str, *, by: Actor) -> BoardEntry | None:
+        """A user steering message to ``agent_id`` (or to all agents and the supervisor).
+
+        * ``coordinated``/``solo``: a board note from the user (top of the addressed
+          agents' digest); returns the entry.
+        * ``parallel_isolated`` (no board, no digest): a system note in the next step
+          of each addressed agent, through its runtime note channel; returns ``None``.
+          Refused only when no control is bound for the agent.
+
+        Emits ``user.steer``. The supervisor (T17) raises ``user_message`` itself for
+        a broadcast: from the user's board note, or from ``user.steer`` without entry.
+        """
         async with self._lock:
             self._ensure_running()
-            if agent_id is not None and agent_id not in self.known_agents():
-                raise NotFoundError(f"agent {agent_id} does not exist")
-            user = by if by.type == "user" else Actor.user()
-            entry = await post_user_steering(
-                self._board,
-                self.session_id,
-                text,
-                to=None if agent_id is None else [agent_id],
-                user_id=user.id,
-                user_name=user.name,
+            if self.session.mode == "parallel_isolated":
+                self._steer_notes(agent_id, text)
+                entry = None
+            else:
+                entry = await self._steer_board(agent_id, text, by)
+            await self._emit(
+                UserSteer(
+                    agent_id=agent_id, text=text, entry_id=None if entry is None else entry.id
+                ),
+                by,
             )
-            await self._emit(UserSteer(agent_id=agent_id, text=text, entry_id=entry.id), by)
-            if agent_id is None:
-                await self._emit(
-                    SupervisorTriggered(
-                        reason="user_message",
-                        detail=" ".join(text.split())[:_DETAIL_CHARS],
-                        entry_ids=[entry.id],
-                    ),
-                    Actor.system(),
-                )
-        self._log.info("user_steer", agent_id=agent_id, entry_id=entry.id)
+        self._log.info(
+            "user_steer", agent_id=agent_id, entry_id=None if entry is None else entry.id
+        )
         return entry
+
+    def _steer_notes(self, agent_id: str | None, text: str) -> None:
+        if agent_id is None:
+            targets = list(self._notes.values())
+            if not targets:
+                raise NotFoundError("no agent can receive the message yet")
+        else:
+            if agent_id not in self._controls:
+                raise NotFoundError(f"agent {agent_id} does not exist or has no desktop yet")
+            targets = [self._notes[agent_id]]
+        note = f"{STEER_NOTE_PREFIX}{' '.join(text.split())}"
+        for sink in targets:
+            sink.add_note(note)
+
+    async def _steer_board(self, agent_id: str | None, text: str, by: Actor) -> BoardEntry:
+        if self._board is None:
+            raise NotSupportedError("steering needs the board")
+        if agent_id is not None and agent_id not in self.known_agents():
+            raise NotFoundError(f"agent {agent_id} does not exist")
+        user = by if by.type == "user" else Actor.user()
+        return await post_user_steering(
+            self._board,
+            self.session_id,
+            text,
+            to=None if agent_id is None else [agent_id],
+            user_id=user.id,
+            user_name=user.name,
+        )
 
     async def takeover(self, agent_id: str, *, by: Actor) -> None:
         """Pause the agent's loop for the user (``paused_by_user`` at its checkpoint)."""
