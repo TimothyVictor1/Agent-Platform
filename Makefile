@@ -12,7 +12,7 @@ BACKEND := cd backend &&
 FRONTEND := cd frontend &&
 COMPOSE := docker compose
 
-.PHONY: help dev api runtime web test test-backend test-frontend lint lint-backend \
+.PHONY: help dev api runtime web test test-backend test-frontend test-evals lint lint-backend \
 	lint-frontend lint-sandbox typecheck format contracts contracts-check sandbox-image \
 	db-up db-down db-migrate debug-bundle install
 
@@ -35,13 +35,16 @@ runtime: ## Run the runtime service
 web: ## Run the Next.js dev server on $$PORT
 	$(FRONTEND) $(PNPM) dev --port $(PORT)
 
-test: test-backend test-frontend ## Run all tests (no network, no Docker)
+test: test-backend test-frontend test-evals ## Run all tests (no network, no Docker)
 
 test-backend:
 	$(BACKEND) uv run pytest
 
 test-frontend:
 	$(FRONTEND) $(PNPM) test
+
+test-evals:
+	uv run --project backend python -m pytest evals/tests
 
 lint: lint-backend lint-frontend ## Lint + format check + typecheck everything
 
