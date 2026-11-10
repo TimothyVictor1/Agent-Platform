@@ -263,7 +263,9 @@ class DockerLocalProvider:
         docker_client: docker.DockerClient | None = None,
         http_transport: httpx.AsyncBaseTransport | None = None,
         poll_interval_s: float = 0.5,
+        mem_limit: str = MEM_LIMIT,
     ) -> None:
+        self._mem_limit = mem_limit
         self._tokens: ControlTokenStore = (
             token_store if token_store is not None else InMemoryControlTokenStore()
         )
@@ -390,8 +392,8 @@ class DockerLocalProvider:
             cap_drop=list(CAP_DROP),
             cap_add=list(CAP_ADD),
             security_opt=list(SECURITY_OPT),
-            mem_limit=MEM_LIMIT,
-            memswap_limit=MEMSWAP_LIMIT,
+            mem_limit=self._mem_limit,
+            memswap_limit=self._mem_limit,  # equal to mem_limit: no swap
             nano_cpus=NANO_CPUS,
             pids_limit=PIDS_LIMIT,
             privileged=False,

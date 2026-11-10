@@ -959,3 +959,21 @@ async def test_http_client_ignores_proxy_env(
     handle = await _create(provider)
     client = handle._client()
     assert client.trust_env is False
+
+
+async def test_mem_limit_applies_to_memory_and_swap(
+    fake_docker: FakeDockerClient, control: FakeControl, store: InMemoryControlTokenStore
+) -> None:
+    provider = DockerLocalProvider(
+        store,
+        worktree=WORKTREE,
+        docker_client=cast(docker.DockerClient, fake_docker),
+        http_transport=httpx.MockTransport(control.handle),
+        ready_timeout_s=0.3,
+        poll_interval_s=0.01,
+        mem_limit="2g",
+    )
+    await _create(provider)
+    (_args, kwargs) = fake_docker.containers.create_calls[0]
+    assert kwargs["mem_limit"] == "2g"
+    assert kwargs["memswap_limit"] == "2g"
