@@ -139,7 +139,11 @@ class DigestBuilder:
 
         lines = [format_entry(e) for _, e in ranked]
         costs = [estimate_tokens(line) + 1 for line in lines]
-        room = budget_tokens if sum(costs) <= budget_tokens else budget_tokens - TAIL_RESERVE_TOKENS
+        room = (
+            budget_tokens
+            if sum(costs) <= budget_tokens
+            else max(1, budget_tokens - TAIL_RESERVE_TOKENS)
+        )
         shown = 0
         used = 0
         for cost in costs:
@@ -152,7 +156,9 @@ class DigestBuilder:
             out = [lines[0][: max(room, 1) * 4]]
         hidden = len(candidates) - shown
         if hidden:
-            out.append(f"+{hidden} other new entries (use read_board to search).")
+            tail = f"+{hidden} other new entries (use read_board to search)."
+            if estimate_tokens("\n".join([*out, tail])) <= budget_tokens:
+                out.append(tail)
         return Digest("\n".join(out), cursor)
 
     async def _relevance(self, agent: Agent, task: Task) -> _Relevance:

@@ -280,3 +280,16 @@ def test_open_questions_show_their_id_and_claims_their_state() -> None:
 )
 def test_sanitize(text: str, limit: int, expected: str) -> None:
     assert sanitize(text, limit) == expected
+
+
+@pytest.mark.parametrize("budget", [1, 2, 4, 8, 16, 17, 20])
+async def test_tiny_digest_budget_never_overflows_with_a_tail(budget: int) -> None:
+    board = FakeBoard()
+    board.add("decision", title="d" * 120, body="b" * 600, author=Actor.supervisor())
+    board.add("note", title="another entry")
+    lines, cursor = await build(builder(board), budget=budget)
+    assert estimate_tokens("\n".join(lines)) <= budget
+    assert lines[0].startswith("[")
+    assert cursor == 2
+    if budget <= 8:
+        assert len(lines) == 1
