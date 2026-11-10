@@ -168,6 +168,8 @@ NO_TOOL_CORRECTION = (
 PROGRESS_TOOLS = frozenset({"post", "answer", "message", "release_claim", "publish_artifact"})
 """Coordination tools whose success counts as progress for the stuck detector."""
 ARG_STRING_LIMIT = 200
+MAX_IDLE_NOTES = 10
+"""Notes kept for the next task while the agent is idle (``add_note``)."""
 
 
 # -- interfaces ---------------------------------------------------------------------------
@@ -593,6 +595,7 @@ class AgentRuntime:
         self._sleep_fn = sleep
         self._actor = Actor.agent(agent.id, agent.name)
         self._run: _TaskRun | None = None
+        self._idle_notes: list[str] = []
         self._lease_lost = asyncio.Event()
         self._log = log.bind(session_id=session.id, agent_id=agent.id)
 
@@ -620,6 +623,8 @@ class AgentRuntime:
         run = _TaskRun(
             task=task, builder=builder, detector=StuckDetector(cfg.stuck), started=self._clock()
         )
+        run.notes.extend(self._idle_notes)  # notes added between tasks (T18)
+        self._idle_notes.clear()
         self._run = run
         self._lease_lost = asyncio.Event()
         self._log = log.bind(session_id=self.session.id, agent_id=self.agent.id, task_key=task.key)
@@ -683,8 +688,13 @@ class AgentRuntime:
         await self.wait_or_stop(self._sleep_fn(seconds))
 
     def add_note(self, text: str) -> None:
+        """Add a system note to the next step. Between tasks it is kept (at most
+        ``MAX_IDLE_NOTES``, oldest dropped) for the first step of the next task."""
         if self._run is not None:
             self._run.notes.append(text)
+            return
+        self._idle_notes.append(text)
+        del self._idle_notes[:-MAX_IDLE_NOTES]
 
     # -- loop -----------------------------------------------------------------------
 
