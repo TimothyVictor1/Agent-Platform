@@ -8,7 +8,8 @@ import pytest
 
 from agentplatform.api.routes._common import EDITABLE_PLAN, current_plan_version, require_status
 from agentplatform.contracts.agent import SandboxRef
-from agentplatform.contracts.common import Actor, utcnow
+from agentplatform.contracts.artifact import Frame
+from agentplatform.contracts.common import Actor, new_id, utcnow
 from agentplatform.contracts.events import (
     AgentCreated,
     AgentSandboxReady,
@@ -99,6 +100,16 @@ async def test_session_plan_task_and_agent_rows_follow_the_log(
         TaskAssigned(**ref_, agent_id=agent.id, attempt=1, ack_deadline=now, lease_expires_at=now),
     )
     await emit(recorder, session, TaskStarted(**ref_, agent_id=agent.id, attempt=1))
+    frame = Frame(
+        id=new_id(),
+        session_id=session.id,
+        agent_id=agent.id,
+        step=1,
+        task_key=task.key,
+        ts=utcnow(),
+        storage_key_small=f"frames/{session.id}/{agent.id}/1.jpg",
+        phash="0" * 16,
+    )
     await emit(
         recorder,
         session,
@@ -108,6 +119,7 @@ async def test_session_plan_task_and_agent_rows_follow_the_log(
             task_key=task.key,
             step=1,
             usage=Usage(steps=1, input_tokens=100, cost_usd=0.01),
+            frame=frame,
         ),
     )
     async with transaction(sessionmaker) as tx:
@@ -122,6 +134,7 @@ async def test_session_plan_task_and_agent_rows_follow_the_log(
         assert a.interactive_stream_url == "http://i"
         t = await repos.tasks.get(task.id)
         assert (t.status, t.attempt, t.assigned_agent_id) == ("running", 1, agent.id)
+        assert await repos.frames.list(session.id) == [frame]
 
     # a stale failure from another agent does not touch the running task
     await emit(

@@ -4,8 +4,9 @@
 which runs a projector inside the append transaction (``ReadModelUpdate``), before
 the caller's own update. ``project_read_models`` keeps the ``sessions``, ``plans``,
 ``tasks`` and ``agents`` tables in step with the log; the API's state checks
-(approve, refine, steer, takeover, ...) read them. Board entries, artifacts and
-approvals are written by their own services and are not touched here.
+(approve, refine, steer, takeover, ...) read them, and the frame metadata of each
+``agent.step`` goes to ``frames`` (replay). Board entries, artifacts and approvals
+are written by their own services and are not touched here.
 
 Session status rules (``sessions.status``):
 
@@ -155,6 +156,8 @@ async def project_read_models(event: Event, tx: object) -> None:
         await _project_session(repos, event)
     elif isinstance(p, AgentStep):
         await repos.sessions.add_usage(event.session_id, p.usage)
+        if p.frame is not None and await repos.frames.find(p.frame.id) is None:
+            await repos.frames.insert(p.frame)
         agent = await repos.agents.find(p.agent_id)
         if agent is not None:
             await repos.agents.upsert(
