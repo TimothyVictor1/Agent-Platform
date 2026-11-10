@@ -23,8 +23,12 @@ install: ## Install backend (uv) and frontend (pnpm) dependencies
 	$(BACKEND) uv sync
 	$(FRONTEND) $(PNPM) install
 
-dev: ## Run API + runtime + web together (T13 wires the processes)
-	$(MAKE) -j3 api runtime web
+dev: db-up db-migrate ## Run API + runtime + web together (ports from .env); Ctrl-C stops all
+	@trap 'kill 0' INT TERM; \
+	($(MAKE) --no-print-directory api 2>&1 | awk '{ print "[api]     " $$0; fflush() }') & \
+	($(MAKE) --no-print-directory runtime 2>&1 | awk '{ print "[runtime] " $$0; fflush() }') & \
+	($(MAKE) --no-print-directory web 2>&1 | awk '{ print "[web]     " $$0; fflush() }') & \
+	wait
 
 api: ## Run the API service
 	$(BACKEND) uv run agentplatform-api
