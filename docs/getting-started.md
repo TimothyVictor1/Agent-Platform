@@ -76,10 +76,15 @@ desktop image and the model profile you name. It never touches your own sessions
 desktops.
 
 ```bash
+make db-up                      # if the databases are not running yet
 cd backend
 APP_LIVE=1 APP_DOCKER=1 APP_LIVE_PROFILE=<your profile> \
   uv run pytest tests/live/test_first_light.py -s
 ```
+
+Stop `make dev` in the same worktree first: its runtime's orphan cleanup removes this
+worktree's desktops of sessions it does not know, and the test's session lives in the
+throwaway database.
 
 It creates the session *"Open the browser, go to example.com and report the page
 heading as output `heading`"*, approves the plan, waits for completion (up to 20
