@@ -1,4 +1,4 @@
-import type { ApprovalDecisionRequest, ApprovalList, ApprovePlanRequest, Artifact, ArtifactList, BoardEntry, BoardPage, CommandAccepted, CreateSessionRequest, EventPage, FollowupRequest, FrameList, Problem, ProfileList, ProvidersHealth, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage, SteerRequest, UserBoardPostRequest } from "@/contracts/generated";
+import type { ApprovalDecisionRequest, ApprovalList, ApprovePlanRequest, Artifact, ArtifactList, BoardEntry, BoardPage, CommandAccepted, CreateSessionRequest, EventPage, FollowupRequest, FrameList, Problem, ProfileList, ProvidersHealth, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage, SteerRequest, UserBoardPostRequest, WsTicket } from "@/contracts/generated";
 import { env } from "./env";
 
 type Query = Record<string, string | number | undefined>;
@@ -35,6 +35,7 @@ export const api = {
   createSession: (body: CreateSessionRequest) => request<Session>("POST", "/sessions", body),
   sessions: (query: { limit?: number; cursor?: string } = {}) => request<SessionPage>("GET", "/sessions", undefined, query),
   session: (sessionId: string) => request<SessionDetail>("GET", `/sessions/${id(sessionId)}`),
+  wsTicket: (sessionId: string) => request<WsTicket>("POST", `/sessions/${id(sessionId)}/ws-ticket`),
   refine: (sessionId: string, body: RefinePlanRequest) => request<CommandAccepted>("POST", `/sessions/${id(sessionId)}/refine`, body),
   updatePlan: (sessionId: string, body: PutPlanRequest) => request<CommandAccepted>("PUT", `/sessions/${id(sessionId)}/plan`, body),
   approve: (sessionId: string, body: ApprovePlanRequest = {}) => request<CommandAccepted>("POST", `/sessions/${id(sessionId)}/approve`, body),

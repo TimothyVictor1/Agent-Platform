@@ -32,7 +32,7 @@ export function reviewDetail(current: Session): SessionDetail {
   return { session: state.session ?? current, plan: state.plan, tasks: Object.values(state.tasks), agents: Object.values(state.agents), counts: { total: Object.keys(state.tasks).length, by_status: {} }, last_seq: state.lastSeq };
 }
 
-export function reviewCommand(current: Session, action: "plan" | "refine" | "approve", tasks?: TaskDraft[], instruction?: string) {
+export function reviewCommand(current: Session, action: "plan" | "refine" | "approve", tasks?: TaskDraft[], instruction?: string, commandId: Event["causation_id"] = null) {
   const detail = reviewDetail(current);
   const events = reviewEvents(current.id) ?? [];
   const version = detail.plan?.version ?? 1;
@@ -41,7 +41,7 @@ export function reviewCommand(current: Session, action: "plan" | "refine" | "app
     const original = detail.plan?.proposal ?? planFixture;
     const next: PlanProposal = action === "plan" ? { ...original, tasks: tasks ?? original.tasks } : refinedProposal(original, instruction ?? "");
     if (action === "refine") events.push(makeEvent("session.plan_proposed", { plan_version: version + 1, proposal: next, diff: null }, events.length + 1, current.id));
-    else events.push(makeEvent("session.plan_updated", { plan_version: version + 1, proposal: next, source: "user", reason: null }, events.length + 1, current.id));
+    else events.push({ ...makeEvent("session.plan_updated", { plan_version: version + 1, proposal: next, source: "user", reason: null }, events.length + 1, current.id), causation_id: commandId });
   }
   persist(current.id, events);
 }

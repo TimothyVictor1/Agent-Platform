@@ -1,4 +1,4 @@
-import type { ApprovePlanRequest, CreateSessionRequest, EventPage, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage } from "@/contracts/generated";
+import type { ApprovePlanRequest, CreateSessionRequest, EventPage, PutPlanRequest, RefinePlanRequest, Session, SessionDetail, SessionPage, WsTicket } from "@/contracts/generated";
 import { fieldErrors, validatePlan } from "@/components/plan/validation";
 import { applyEvent, initialSessionState } from "@/lib/session-store";
 import { budgets, health, profiles, scriptedEvents, session } from "./fixtures";
@@ -30,7 +30,12 @@ export async function mockRequest(rawUrl: string, init: RequestInit): Promise<Re
   if (resource === "sessions") {
     const current = sessions().find(item => item.id === resourceId);
     if (!current) return json({ type: "about:blank", title: "Session not found", status: 404, detail: "Unknown mock session" }, 404);
+    if (action === "ws-ticket" && init.method === "POST") {
+      const ticket = `mock_ws_ticket_${crypto.randomUUID()}`; // gitleaks:allow
+      return json({ ticket, expires_at: new Date(Date.now() + 60000).toISOString(), ttl_s: 60 } satisfies WsTicket, 201);
+    }
     const review = isReviewSession(resourceId);
+    const commandId = crypto.randomUUID();
     const events = (review ? reviewEvents(resourceId) : null) ?? scriptedEvents(resourceId);
     if (!action) {
       if (review) return json(reviewDetail(current));
@@ -43,7 +48,7 @@ export async function mockRequest(rawUrl: string, init: RequestInit): Promise<Re
       if (request.base_version != null && request.base_version !== detail.plan?.version) return json({ type: "about:blank", title: "Plan version changed", status: 409, detail: "Reload the latest plan before saving." }, 409);
       const errors = [...validatePlan(request.tasks), ...fieldErrors(request.tasks)];
       if (errors.length) return json({ type: "about:blank", title: "Invalid plan", status: 422, errors: errors.map(error => ({ message: error.message, task_key: error.task_key, code: error.code, loc: null, details: null })) }, 422);
-      reviewCommand(current, "plan", request.tasks);
+      reviewCommand(current, "plan", request.tasks, undefined, commandId);
     }
     if (review && action === "refine" && init.method === "POST") reviewCommand(current, "refine", undefined, (body as RefinePlanRequest).instruction);
     if (review && action === "approve" && init.method === "POST") {
@@ -61,7 +66,7 @@ export async function mockRequest(rawUrl: string, init: RequestInit): Promise<Re
       const file = init.body.get("file");
       if (file instanceof File) return json({ ...((await import("./fixtures")).artifact), id: crypto.randomUUID(), session_id: resourceId, name: file.name, mime: file.type || "application/octet-stream", size_bytes: file.size, description: init.body.get("description") }, 201);
     }
-    return json({ command_id: crypto.randomUUID(), session_id: resourceId });
+    return json({ command_id: commandId, session_id: resourceId });
   }
   if (resource === "frames") return new Response(Uint8Array.from(atob(thumbnailJpeg), char => char.charCodeAt(0)), { headers: { "Content-Type": "image/jpeg" } });
   if (resource === "artifacts" && action === "download") return new Response("Launch report", { headers: { "Content-Type": "text/plain" } });

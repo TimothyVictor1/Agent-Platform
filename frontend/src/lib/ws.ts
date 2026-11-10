@@ -1,4 +1,5 @@
 import type { Event, WsServerMessage, WsThumbnailMessage } from "@/contracts/generated";
+import { api, ApiError } from "./api";
 import { env } from "./env";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -13,19 +14,24 @@ export class SessionSocket {
   private attempts = 0;
   private stopped = true;
   private currentState: ConnectionState = "disconnected";
+  private currentError: Error | null = null;
   private readonly events = new Set<(event: Event) => void>();
   private readonly thumbnails = new Set<(thumbnail: WsThumbnailMessage) => void>();
   private readonly states = new Set<(state: ConnectionState) => void>();
+  private readonly errors = new Set<(error: Error) => void>();
   get state() { return this.currentState; }
+  get error() { return this.currentError; }
   get lastSeq() { return this.seq; }
   onEvent(listener: (event: Event) => void) { this.events.add(listener); return () => { this.events.delete(listener); }; }
   onThumbnail(listener: (thumbnail: WsThumbnailMessage) => void) { this.thumbnails.add(listener); return () => { this.thumbnails.delete(listener); }; }
   onState(listener: (state: ConnectionState) => void) { this.states.add(listener); listener(this.currentState); return () => { this.states.delete(listener); }; }
+  onError(listener: (error: Error) => void) { this.errors.add(listener); return () => { this.errors.delete(listener); }; }
   private setState(state: ConnectionState) { this.currentState = state; this.states.forEach(listener => listener(state)); }
   connect(sessionId: string, since = 0) {
     this.disconnect();
+    this.currentError = null;
     this.sessionId = sessionId; this.seq = since; this.attempts = 0; this.stopped = false;
-    this.open(this.generation);
+    void this.open(this.generation);
   }
   disconnect() {
     this.stopped = true; this.generation++;
@@ -47,19 +53,21 @@ export class SessionSocket {
       });
     }
   }
-  private open(generation: number) {
+  private async open(generation: number) {
     if (this.stopped || generation !== this.generation) return;
     this.setState(this.attempts ? "reconnecting" : "connecting");
-    if (env.mock) {
-      void import("@/mocks/socket").then(({ openMockSocket }) => {
+    try {
+      const { ticket } = await api.wsTicket(this.sessionId);
+      if (this.stopped || generation !== this.generation) return;
+      if (env.mock) {
+        const { openMockSocket } = await import("@/mocks/socket");
         if (this.stopped || generation !== this.generation) return;
         this.setState("connected");
         this.cancelMock = openMockSocket(this.sessionId, this.seq, message => this.receive(message));
-      });
-      return;
-    }
-    try {
+        return;
+      }
       const url = new URL(`${env.wsUrl.replace(/\/$/, "")}/api/v1/ws/sessions/${encodeURIComponent(this.sessionId)}`);
+      url.searchParams.set("ticket", ticket);
       url.searchParams.set("since", String(this.seq));
       // Browser WebSocket cannot set Authorization. Do not put bearer secrets in URLs.
       const socket = new WebSocket(url.toString());
@@ -76,20 +84,32 @@ export class SessionSocket {
       socket.onerror = () => socket.close();
       socket.onclose = ({ code }) => {
         this.socket = null;
-        if (code === 1008 || (code >= 4000 && code <= 4999)) {
+        if (code === 1008 || (code >= 4000 && code <= 4999 && code !== 4401)) {
           this.stopped = true;
           this.setState("disconnected");
           return;
         }
         this.reconnect(generation);
       };
-    } catch { this.reconnect(generation); }
+    } catch (error: unknown) {
+      if (this.stopped || generation !== this.generation) return;
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        this.stopped = true;
+        // Do not expose response bodies, which may contain credentials or ticket data.
+        const failure = new Error(`WebSocket ticket authorization failed (HTTP ${error.status}). Check your API token and session access.`);
+        this.currentError = failure;
+        this.setState("disconnected");
+        this.errors.forEach(listener => listener(failure));
+        return;
+      }
+      this.reconnect(generation);
+    }
   }
   private reconnect(generation: number) {
     if (this.stopped || generation !== this.generation) return;
     this.setState("reconnecting");
     const delay = Math.min(1000 * 2 ** this.attempts++, 30000);
-    this.timer = setTimeout(() => this.open(generation), delay);
+    this.timer = setTimeout(() => { this.timer = null; void this.open(generation); }, delay);
   }
 }
 function isServerMessage(value: unknown): value is WsServerMessage {
