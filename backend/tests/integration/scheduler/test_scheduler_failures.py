@@ -155,3 +155,22 @@ async def test_user_stop_cancels_tasks_and_kills_sandboxes() -> None:
     assert len(await w.payloads("agent.stopped")) == 2
     assert all(sb.killed for sb in w.provider.sandboxes.values())
     assert w.scheduler.finished
+
+
+async def test_all_queues_silent_exhaust_ack_reassignments_and_fail_session() -> None:
+    w = await open_session(agent_count=2, deaf_agents=["Ada", "Brook"])
+    try:
+        await w.wait_for("session.failed", limit_s=3)
+        await w.finished()
+    finally:
+        await w.stop()
+    failures = await w.payloads("task.failed")
+    assert [(p.reason, p.attempt, p.will_retry) for p in failures] == [
+        ("assignment_not_acked", 1, True),
+        ("assignment_not_acked", 2, False),
+    ]
+    assert len(await w.payloads("task.assigned")) == 4
+    assert await w.payloads("task.started") == []
+    assert w.scheduler.state.tasks["T1"].status == "failed"
+    assert len(await w.payloads("supervisor.triggered")) == 1
+    assert len(await w.payloads("session.failed")) == 1

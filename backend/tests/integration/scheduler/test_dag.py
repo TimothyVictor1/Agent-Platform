@@ -190,3 +190,60 @@ def test_fold_ignores_stale_attempt_events() -> None:
     assert _status(state) == "running"
     assert state.tasks["T1"].attempt == 1
     assert state.last_seq == 6
+
+
+def test_ack_timeout_count_is_folded_and_reset_by_review() -> None:
+    from agentplatform.contracts.events import TaskAccepted, TaskReworkRequested
+
+    state = SchedulerState.for_session(make_session(session_id="s"))
+    state.tasks = dag({"T1": []})
+    later = utcnow() + timedelta(seconds=10)
+    assigned = _ev(
+        1,
+        TaskAssigned(
+            task_id="id-T1",
+            task_key="T1",
+            agent_id="a",
+            attempt=1,
+            ack_deadline=later,
+            lease_expires_at=later,
+        ),
+    )
+    state.apply(assigned)
+    ready = _ev(2, TaskReady(task_id="id-T1", task_key="T1"))
+    state.apply(ready.model_copy(update={"causation_id": assigned.id}))
+    assert state.ack_timeouts == {"T1": 1}
+    # A manual reassignment does not spend the ack timeout allowance.
+    state.apply(assigned.model_copy(update={"seq": 3}))
+    state.apply(ready.model_copy(update={"seq": 4}))
+    assert state.ack_timeouts == {"T1": 1}
+    state.apply(
+        _ev(
+            5,
+            TaskFailed(
+                task_id="id-T1",
+                task_key="T1",
+                reason="assignment_not_acked",
+                attempt=1,
+                will_retry=True,
+                agent_id="a",
+            ),
+        )
+    )
+    assert state.ack_timeouts == {"T1": 2}
+    state.apply(
+        _ev(
+            6,
+            TaskReworkRequested(
+                task_id="id-T1",
+                task_key="T1",
+                instructions="retry",
+                rework_count=1,
+            ),
+        )
+    )
+    assert state.ack_timeouts == {}
+    state.apply(assigned.model_copy(update={"seq": 7}))
+    state.apply(ready.model_copy(update={"seq": 8, "causation_id": assigned.id}))
+    state.apply(_ev(9, TaskAccepted(task_id="id-T1", task_key="T1")))
+    assert state.ack_timeouts == {}

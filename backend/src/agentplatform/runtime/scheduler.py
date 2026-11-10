@@ -121,6 +121,8 @@ _HELD_MODES = frozenset({"pause", "takeover"})
 class SchedulerConfig:
     ack_timeout_s: float = 10.0
     """``task.assignment_acked`` must arrive within this time or the task is reassigned."""
+    max_reassignments: int = 3
+    """Consecutive ack timeouts before failing an assignment through the retry policy."""
     lease_ttl_s: float = 45.0
     """Task lease TTL; agents renew it with every heartbeat (10 s)."""
     tick_s: float = 1.0
@@ -358,6 +360,7 @@ class SchedulerState:
     done_by: dict[str, str] = field(default_factory=dict)
     preferred: dict[str, str] = field(default_factory=dict)
     avoid: dict[str, set[str]] = field(default_factory=dict)
+    ack_timeouts: dict[str, int] = field(default_factory=dict)
     artifacts: dict[str, Artifact] = field(default_factory=dict)
     usage: Usage = field(default_factory=Usage)
     warned: set[str] = field(default_factory=set)
@@ -437,6 +440,8 @@ class SchedulerState:
                 stale = self.assignments.pop(key, None)
                 if stale is not None and not stale.acked:
                     self.avoid.setdefault(key, set()).add(stale.agent_id)
+                    if event.causation_id == stale.event_id:
+                        self.ack_timeouts[key] = self.ack_timeouts.get(key, 0) + 1
                 self._set_task(key, status="ready", assigned_agent_id=None)
         elif isinstance(p, TaskAssigned):
             if p.task_key in self.tasks:
@@ -468,10 +473,12 @@ class SchedulerState:
                 agent = self.last_agent.get(p.task_key)
                 if agent is not None:
                     self.done_by[p.task_key] = agent
+                self.ack_timeouts.pop(p.task_key, None)
                 self.preferred.pop(p.task_key, None)
                 self.avoid.pop(p.task_key, None)
         elif isinstance(p, TaskReworkRequested):
             if p.task_key in self.tasks:
+                self.ack_timeouts.pop(p.task_key, None)
                 self.assignments.pop(p.task_key, None)
                 agent = p.agent_id or self.last_agent.get(p.task_key)
                 if agent is not None:
@@ -487,6 +494,8 @@ class SchedulerState:
             if key in self.tasks and (
                 self._current(key, p.agent_id, p.attempt) or key not in self.assignments
             ):
+                if p.reason == "assignment_not_acked":
+                    self.ack_timeouts[key] = self.ack_timeouts.get(key, 0) + 1
                 self.assignments.pop(key, None)
                 task = self.tasks[key]
                 self._set_task(
@@ -981,7 +990,20 @@ class Scheduler:
                     a.agent_id,
                     f"no task.assignment_acked for {key} within {self.config.ack_timeout_s:g} s",
                 )
-            await self._emit(TaskReady(task_id=task.id, task_key=key), correlation_id=task.id)
+            payload: EventPayload
+            if self.state.ack_timeouts.get(key, 0) + 1 >= self.config.max_reassignments:
+                reason = "assignment_not_acked"
+                payload = TaskFailed(
+                    task_id=task.id,
+                    task_key=key,
+                    reason=reason,
+                    attempt=a.attempt,
+                    agent_id=a.agent_id,
+                    will_retry=retry_decision(task, a.attempt, reason),
+                )
+            else:
+                payload = TaskReady(task_id=task.id, task_key=key)
+            await self._emit(payload, correlation_id=task.id, causation_id=a.event_id)
             self._log.warning("ack_timeout", task_key=key, agent_id=a.agent_id)
             self.pool.recover(a.agent_id, "assignment not acknowledged")
 
