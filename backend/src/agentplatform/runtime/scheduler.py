@@ -268,7 +268,7 @@ def stalled(tasks: Mapping[str, Task]) -> bool:
         if key in dead:
             return dead[key]
         t = tasks.get(key)
-        if t is None or t.status == "failed" or key in path:
+        if t is None or t.status in ("failed", "cancelled") or key in path:
             result = True
         elif t.status in FINISHED_TASK_STATUSES:
             result = False
@@ -1066,8 +1066,10 @@ class Scheduler:
             await self._emit(SessionCompleted(summary=f"{done} of {len(tasks)} tasks done"))
             return
         if st.status == "running" and not self.config.supervisor_enabled and stalled(tasks):
-            failed = [t.key for t in tasks.values() if t.status == "failed"]
-            await self._emit(SessionFailed(reason=f"tasks failed: {', '.join(failed)}"))
+            blocked = [t.key for t in tasks.values() if t.status in ("failed", "cancelled")]
+            await self._emit(
+                SessionFailed(reason=f"tasks failed or cancelled: {', '.join(blocked)}")
+            )
             return
         if (
             st.status == "running"

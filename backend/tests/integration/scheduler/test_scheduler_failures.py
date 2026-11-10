@@ -174,3 +174,25 @@ async def test_all_queues_silent_exhaust_ack_reassignments_and_fail_session() ->
     assert w.scheduler.state.tasks["T1"].status == "failed"
     assert len(await w.payloads("supervisor.triggered")) == 1
     assert len(await w.payloads("session.failed")) == 1
+
+
+async def test_recorded_cancellation_stalls_transitive_dependents() -> None:
+    from agentplatform.contracts.events import TaskCancelled, TaskCreated
+    from agentplatform.testing import make_task, make_tasks
+
+    w = await open_session(edges={"T1": [], "T2": ["T1"], "T3": ["T2"]}, start=False)
+    for draft in make_tasks({"T1": [], "T2": ["T1"], "T3": ["T2"]}):
+        await w.record(TaskCreated(task=make_task(draft, session_id=w.session.id)))
+    task = next(p.task for p in await w.payloads("task.created") if p.task.key == "T1")
+    await w.record(TaskCancelled(task_id=task.id, task_key="T1", reason="cancelled by user"))
+    w.start()
+    try:
+        await w.wait_for("session.failed", limit_s=1)
+        await w.finished()
+    finally:
+        await w.stop()
+    assert await w.payloads("task.started") == []
+    assert w.scheduler.state.tasks["T1"].status == "cancelled"
+    assert [w.scheduler.state.tasks[k].status for k in ("T2", "T3")] == ["cancelled"] * 2
+    assert len(await w.payloads("session.failed")) == 1
+    assert await w.payloads("session.completed") == []
