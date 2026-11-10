@@ -1129,6 +1129,15 @@ class Supervisor:
             payload, cause = self._pending_detections.pop(0)
             if self.queue.has(_trigger_key(payload)):
                 continue  # merged with a pending trigger: no second event
+            probe = Trigger(
+                event_id="",
+                seq=0,
+                reason=payload.reason,
+                task_key=payload.task_key,
+                entry_ids=tuple(payload.entry_ids),
+            )
+            if not self._relevant(probe):
+                continue  # already resolved (e.g. found again after a restart)
             await self._emit(payload, causation_id=cause, correlation_id=self._correlation(payload))
 
     def _correlation(self, p: SupervisorTriggered) -> str | None:
