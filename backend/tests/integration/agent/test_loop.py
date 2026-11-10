@@ -234,7 +234,7 @@ def last_user_text(req: ModelRequest) -> str:
 
 async def test_happy_path_submits_result(harness: Any) -> None:
     h = harness([*clicks(3), submit(result="42")])
-    out = await h.run()
+    out = await h.run(limit_s=30)
 
     assert out.status == "submitted"
     assert out.result is not None
