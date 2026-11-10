@@ -586,6 +586,7 @@ class BoardRepository(_Repository):
         *,
         kinds: Sequence[BoardEntryKind] | None = None,
         limit: int = 20,
+        viewer_agent_id: str | None = None,
     ) -> builtins.list[BoardEntry]:
         """Full-text search over title + body (English stemming), best match first.
 
@@ -600,6 +601,15 @@ class BoardRepository(_Repository):
         )
         if kinds is not None:
             stmt = stmt.where(BoardEntryRow.kind.in_(kinds))
+        if viewer_agent_id is not None:
+            stmt = stmt.where(
+                BoardEntryRow.to_agents.is_(None)
+                | (BoardEntryRow.to_agents.any_() == viewer_agent_id)
+                | (
+                    (BoardEntryRow.author_type == "agent")
+                    & (BoardEntryRow.author_id == viewer_agent_id)
+                )
+            )
         stmt = stmt.order_by(
             func.ts_rank(BoardEntryRow.search, tsquery).desc(), BoardEntryRow.seq.desc()
         ).limit(max(1, min(limit, 200)))

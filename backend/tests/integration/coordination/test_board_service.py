@@ -458,3 +458,29 @@ async def test_agent_posts_require_a_step(
             await board.post(world.id, draft(kind), author=world.actor(world.ada), step=2)
     for author in (Actor.supervisor(), Actor.user("local"), Actor.system()):
         await board.post(world.id, draft("fact"), author=author)
+
+
+async def test_search_filters_visibility_before_ranking_limit(
+    board: PostgresBoardService, world: World
+) -> None:
+    public = await board.post(world.id, draft(title="pricing"), author=Actor.supervisor())
+    own = await board.post(
+        world.id,
+        draft(title="pricing", to=[world.brook.id]),
+        author=world.actor(world.ada),
+        step=1,
+    )
+    direct = await board.post(
+        world.id, draft(title="pricing", to=[world.ada.id]), author=Actor.supervisor()
+    )
+    for _ in range(20):
+        await board.post(
+            world.id, draft(title="pricing", to=[world.brook.id]), author=Actor.supervisor()
+        )
+    await board.post(
+        world.id, draft(title="pricing", to=[world.brook.id]), author=Actor.user(world.ada.id)
+    )
+    found = await board.search(world.id, query="pricing", limit=3, viewer_agent_id=world.ada.id)
+    assert [e.id for e in found] == [direct.id, own.id, public.id]
+    # Human/supervisor views retain unrestricted search.
+    assert len(await board.search(world.id, query="pricing", limit=100)) == 24

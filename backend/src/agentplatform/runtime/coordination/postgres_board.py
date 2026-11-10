@@ -326,10 +326,14 @@ class PostgresBoardService:
         async with transaction(self._sessionmaker) as tx:
             repos = Repositories(tx)
             if query and query.strip():
-                # Best match first. Visibility and tags are filtered here (the
-                # repository has no viewer filter), so fetch generously.
+                # Filter visibility before the repository applies its rank/limit.
+                # Overfetch for the remaining tag filter.
                 candidates = await repos.board.search(
-                    session_id, query, kinds=kinds, limit=min(200, limit * 5)
+                    session_id,
+                    query,
+                    kinds=kinds,
+                    limit=min(200, limit * 5),
+                    viewer_agent_id=viewer_agent_id,
                 )
                 for entry in candidates:
                     if self._matches(entry, wanted_tags, viewer_agent_id):
