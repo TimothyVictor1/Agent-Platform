@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -350,3 +351,34 @@ async def test_fetch_size_limit(harness: Harness) -> None:
 async def test_mime_sniffing(harness: Harness, data: bytes, name: str, mime: str) -> None:
     artifact = await harness.publish(data, name)
     assert artifact.mime == mime
+
+
+@pytest.mark.parametrize("prefetch", [False, True], ids=["fetch", "prefetch"])
+async def test_missing_and_cross_session_artifacts_are_indistinguishable(
+    harness: Harness, prefetch: bool
+) -> None:
+    artifact = await harness.publish()
+    harness.metadata.rows[artifact.id] = artifact.model_copy(update={"session_id": "other"})
+    transfer = StoreArtifactPrefetch(harness.service, harness.store)
+    errors: list[tuple[str, int, str]] = []
+    with patch.object(harness.store, "get", new_callable=AsyncMock) as read_blob:
+        for artifact_id in ("missing", artifact.id):
+            attempt = (
+                transfer.prefetch(
+                    session_id="s",
+                    agent_id="target",
+                    sandbox=harness.target,
+                    artifact_ids=[artifact_id],
+                )
+                if prefetch
+                else harness.fetch(artifact_id)
+            )
+            with pytest.raises(NotFoundError) as caught:
+                await attempt
+            error = caught.value
+            errors.append((error.code, error.status, str(error)))
+        read_blob.assert_not_awaited()
+    assert errors == [("not_found", 404, "artifact not found in this session")] * 2
+    assert harness.target.files == {}
+    assert harness.target.actions == []
+    assert harness.log.of_type("s", "artifact.fetched") == []

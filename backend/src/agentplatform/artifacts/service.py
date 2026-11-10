@@ -198,7 +198,12 @@ class ArtifactService:
         directory: str = "/home/agent/Shared",
     ) -> str:
         directory = sandbox_path(directory, shared=True)
-        artifact = await self.metadata.get(artifact_id)
+        try:
+            artifact = await self.metadata.get(artifact_id)
+        except NotFoundError:
+            # Hide repository-specific details so callers cannot distinguish an
+            # unknown ID from an artifact owned by a different session.
+            raise NotFoundError("artifact not found in this session") from None
         if artifact.session_id != session_id:
             raise NotFoundError("artifact not found in this session")
         name = artifact_name(artifact.name)
