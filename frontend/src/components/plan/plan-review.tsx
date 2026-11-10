@@ -18,13 +18,21 @@ import { RefineDiff } from "./refine-diff";
 import { fieldErrors, nodeErrors, validatePlan } from "./validation";
 
 /** Commands are asynchronous; wait for the socket or a refreshed REST snapshot. */
-export function waitForPlan(store: ReturnType<typeof createSessionStore>, predicate: (plan: Plan) => boolean): Promise<Plan> {
+export function waitForPlan(store: ReturnType<typeof createSessionStore>, predicate: (plan: Plan) => boolean, commandId?: string): Promise<Plan> {
+  const confirmed = (state: ReturnType<typeof store.getState>) => {
+    const plan = state.plan;
+    if (!plan || !predicate(plan)) return false;
+    if (commandId === undefined) return true;
+    const event = state.activity.findLast(event => (event.type === "session.plan_updated" || event.type === "session.plan_proposed") && event.payload.plan_version === plan.version);
+    // T12 runtimes and REST snapshots lack causation; preserve their version check.
+    return event?.causation_id == null || (event.type === "session.plan_updated" && event.causation_id === commandId);
+  };
   return new Promise((resolve, reject) => {
-    const current = store.getState().plan;
-    if (current && predicate(current)) { resolve(current); return; }
+    const current = store.getState();
+    if (current.plan && confirmed(current)) { resolve(current.plan); return; }
     const timer = setTimeout(() => { unsubscribe(); reject(new Error("The updated plan has not arrived. Retry after reconnecting.")); }, 20000);
     const unsubscribe = store.subscribe(state => {
-      if (state.plan && predicate(state.plan)) { clearTimeout(timer); unsubscribe(); resolve(state.plan); }
+      if (state.plan && confirmed(state)) { clearTimeout(timer); unsubscribe(); resolve(state.plan); }
     });
   });
 }
@@ -78,8 +86,8 @@ export function PlanReview({ sessionId }: { sessionId: string }) {
     const { proposal, base } = draftStore.getState();
     if (!proposal || !base) throw new Error("The plan is still loading.");
     if (!force && canonicalStringify(proposal.tasks) === canonicalStringify(base.proposal.tasks)) return base;
-    await api.updatePlan(sessionId, { tasks: proposal.tasks, base_version: base.version });
-    const saved = await waitForPlan(sessionStore, plan => plan.version > base.version);
+    const { command_id } = await api.updatePlan(sessionId, { tasks: proposal.tasks, base_version: base.version });
+    const saved = await waitForPlan(sessionStore, plan => plan.version > base.version, command_id);
     if (canonicalStringify(saved.proposal.tasks) !== canonicalStringify(proposal.tasks)) {
       draftStore.getState().changedOnServer(saved);
       return null;

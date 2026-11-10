@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "@/lib/api";
+import { SessionSocket } from "@/lib/ws";
 import { session } from "@/mocks/fixtures";
 import { planFixture, reviewCommand } from "@/mocks/plan";
 import { nodeErrors } from "./validation";
@@ -28,6 +29,23 @@ beforeEach(() => { localStorage.clear(); push.mockClear(); });
 afterEach(() => vi.restoreAllMocks());
 
 describe("Plan review", { timeout: 15_000 }, () => {
+  it("waits for the save command's update rather than confirming another command's matching tasks", async () => {
+    const receive = vi.fn();
+    const subscribe = SessionSocket.prototype.onEvent;
+    vi.spyOn(SessionSocket.prototype, "onEvent").mockImplementation(function (this: SessionSocket, listener) {
+      return subscribe.call(this, event => { listener(event); receive(event); });
+    });
+    vi.spyOn(api, "updatePlan").mockImplementationOnce(async (_id, body) => {
+      reviewCommand(session, "plan", body.tasks, undefined, "another-command");
+      return { command_id: "save-command", session_id: session.id };
+    });
+    await ready(); await userEvent.click(screen.getByRole("button", { name: "Save plan" }));
+    await waitFor(() => expect(receive).toHaveBeenCalledWith(expect.objectContaining({ type: "session.plan_updated", causation_id: "another-command" })));
+    expect(screen.queryByText("Plan saved.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve plan" })).toBeDisabled();
+    reviewCommand(session, "plan", planFixture.tasks, undefined, "save-command");
+    await screen.findByText("Plan saved."); expect(screen.getByText("Version 3")).toBeVisible();
+  });
   it("loads a newer server plan automatically when the draft has no unsaved edits", async () => {
     await ready(); await select();
     const tasks = structuredClone(planFixture.tasks); tasks[0].title = "Updated on the server";

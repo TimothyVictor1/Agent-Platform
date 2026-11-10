@@ -28,7 +28,8 @@ describe("plan review mock transport", () => {
   it("persists saved tasks and rejects stale versions and invalid inputs", async () => {
     const detail = await api.session("demo-session");
     const tasks = structuredClone(detail.plan!.proposal.tasks); tasks[0].title = "Edited research";
-    await api.updatePlan("demo-session", { tasks, base_version: 1 });
+    const saved = await api.updatePlan("demo-session", { tasks, base_version: 1 });
+    expect((await api.events("demo-session", { after_seq: detail.last_seq })).items).toEqual([expect.objectContaining({ type: "session.plan_updated", causation_id: saved.command_id })]);
     expect((await api.session("demo-session")).plan).toMatchObject({ version: 2, proposal: { tasks } });
     await expect(api.updatePlan("demo-session", { tasks, base_version: 1 })).rejects.toMatchObject({ status: 409 });
     tasks[0].inputs = [{ from_task: "unknown", output_key: "result" }];
