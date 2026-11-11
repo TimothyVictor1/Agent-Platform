@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import AsyncIterator
 
-from agentplatform.artifacts.base import StoredObject, content_key, validate_key
+from agentplatform.artifacts.base import (
+    DEFAULT_CHUNK_BYTES,
+    StoredObject,
+    content_key,
+    validate_key,
+)
 from agentplatform.errors import NotFoundError
 
 __all__ = ["InMemoryArtifactStore"]
@@ -31,6 +37,21 @@ class InMemoryArtifactStore:
             return self._objects[key][1]
         except KeyError:
             raise NotFoundError(f"object {key!r} not found") from None
+
+    async def open_read(
+        self, key: str, *, chunk_size: int = DEFAULT_CHUNK_BYTES
+    ) -> tuple[StoredObject, AsyncIterator[bytes]]:
+        validate_key(key)
+        entry = self._objects.get(key)
+        if entry is None:
+            raise NotFoundError(f"object {key!r} not found")
+        obj, data = entry
+
+        async def chunks() -> AsyncIterator[bytes]:
+            for start in range(0, len(data), chunk_size):
+                yield data[start : start + chunk_size]
+
+        return obj, chunks()
 
     async def stat(self, key: str) -> StoredObject | None:
         validate_key(key)

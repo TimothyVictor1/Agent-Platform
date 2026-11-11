@@ -19,14 +19,17 @@ segments, no ``.``/``..``). Conventions:
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from agentplatform.errors import InvalidRequestError
 
 __all__ = [
+    "DEFAULT_CHUNK_BYTES",
     "ArtifactStore",
     "StoredObject",
+    "StreamingArtifactStore",
     "content_key",
     "frame_key",
     "validate_key",
@@ -91,4 +94,21 @@ class ArtifactStore(Protocol):
 
     async def delete(self, key: str) -> None:
         """Remove the object. No error if it does not exist."""
+        ...
+
+
+DEFAULT_CHUNK_BYTES = 64 * 1024
+
+
+@runtime_checkable
+class StreamingArtifactStore(Protocol):
+    """Optional ``ArtifactStore`` capability: read an object in chunks, so serving a
+    50 MB download never holds the whole object in memory (T21)."""
+
+    async def open_read(
+        self, key: str, *, chunk_size: int = DEFAULT_CHUNK_BYTES
+    ) -> tuple[StoredObject, AsyncIterator[bytes]]:
+        """Metadata and the bytes as chunks of at most ``chunk_size``. Raises
+        ``NotFoundError`` (missing) or ``InvalidRequestError`` (bad key) before it
+        returns. The iterator must be consumed or closed (``aclose``)."""
         ...

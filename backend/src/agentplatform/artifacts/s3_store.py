@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import TYPE_CHECKING, NoReturn
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from agentplatform.artifacts.base import StoredObject, content_key
+from agentplatform.artifacts.base import DEFAULT_CHUNK_BYTES, StoredObject, content_key
 from agentplatform.artifacts.keys import validate_storage_key
 from agentplatform.errors import AppError, NotFoundError
 
@@ -57,6 +58,33 @@ class S3ArtifactStore:
             return await asyncio.to_thread(read)
         except (BotoCoreError, ClientError) as exc:
             self._raise(exc)
+
+    async def open_read(
+        self, key: str, *, chunk_size: int = DEFAULT_CHUNK_BYTES
+    ) -> tuple[StoredObject, AsyncIterator[bytes]]:
+        validate_storage_key(key)
+        try:
+            response = await asyncio.to_thread(self._client.get_object, Bucket=self.bucket, Key=key)
+        except (BotoCoreError, ClientError) as exc:
+            self._raise(exc)
+        obj = StoredObject(
+            key,
+            response["ContentLength"],
+            response.get("Metadata", {}).get("sha256", ""),
+            response.get("ContentType", "application/octet-stream"),
+        )
+        body: Any = response["Body"]
+
+        async def chunks() -> AsyncIterator[bytes]:
+            try:
+                while block := await asyncio.to_thread(body.read, chunk_size):
+                    yield bytes(block)
+            except (BotoCoreError, ClientError) as exc:
+                raise AppError("S3 read failed") from exc
+            finally:
+                body.close()
+
+        return obj, chunks()
 
     def _raise(self, exc: BotoCoreError | ClientError) -> NoReturn:
         if isinstance(exc, ClientError) and exc.response["Error"]["Code"] in {

@@ -166,3 +166,52 @@ async def test_trailing_newline_key_refused(tmp_path: Path) -> None:
     store = FileSystemArtifactStore(root)
     with pytest.raises(InvalidRequestError):
         await store.put(b"x", content_type="text/plain", key="name\n")
+
+
+async def test_open_read_streams_in_chunks(store: ArtifactStore) -> None:
+    """T21: downloads stream; every store the app builds can read in chunks."""
+    from agentplatform.artifacts.base import StreamingArtifactStore
+
+    assert isinstance(store, StreamingArtifactStore)
+    data = bytes(range(256)) * 1000  # 256 000 bytes
+    obj = await store.put(data, content_type="application/octet-stream")
+    meta, chunks = await store.open_read(obj.key, chunk_size=10_000)
+    assert (meta.size_bytes, meta.sha256) == (len(data), obj.sha256)
+    parts = [c async for c in chunks]
+    assert b"".join(parts) == data
+    assert max(len(p) for p in parts) <= 10_000
+    assert len(parts) == 26
+
+    # closing early releases the object (the fs store keeps no file open)
+    _, early = await store.open_read(obj.key, chunk_size=1000)
+    first = await anext(early)
+    assert first == data[:1000]
+    await early.aclose()  # type: ignore[attr-defined]
+
+    with pytest.raises(NotFoundError):
+        await store.open_read(content_key("0" * 64))
+    with pytest.raises(InvalidRequestError):
+        await store.open_read("../etc/passwd")
+
+
+@pytest.fixture
+def objects_root(tmp_path: Path) -> Path:
+    return tmp_path.resolve() / "objects"
+
+
+async def test_download_never_reads_the_whole_object(objects_root: Path) -> None:
+    """T21 (known issue 7): the download route streams from a streaming store and
+    does not call ``get`` (which holds the whole object in memory)."""
+    from agentplatform.api.routes.artifacts import CHUNK, _open_blob
+
+    class NoGet(FileSystemArtifactStore):
+        async def get(self, key: str) -> bytes:
+            raise AssertionError("whole-object read")
+
+    store = NoGet(objects_root)
+    data = b"x" * (3 * CHUNK + 5)
+    obj = await store.put(data, content_type="application/octet-stream")
+    body, size = await _open_blob(store, obj.key)
+    parts = [c async for c in body]
+    assert size == len(data)
+    assert [len(p) for p in parts] == [CHUNK, CHUNK, CHUNK, 5]

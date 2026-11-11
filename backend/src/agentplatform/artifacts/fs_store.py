@@ -12,13 +12,14 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
-from agentplatform.artifacts.base import StoredObject, content_key
+from agentplatform.artifacts.base import DEFAULT_CHUNK_BYTES, StoredObject, content_key
 from agentplatform.artifacts.keys import validate_storage_key
 from agentplatform.errors import InvalidRequestError, NotFoundError
 
@@ -52,23 +53,33 @@ class FileSystemArtifactStore:
         finally:
             os.close(fd)
 
-    def _read(self, key: str, *, metadata_only: bool = False) -> tuple[StoredObject, bytes]:
+    def _open(self, key: str) -> tuple[StoredObject, BinaryIO]:
+        """The object's header and its file, positioned at the first byte of data.
+        The caller closes the file."""
         parts = validate_storage_key(key).split("/")
         try:
             with self._directory(tuple(parts[:-1])) as directory:
                 fd = os.open(
                     parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
                 )
-                with os.fdopen(fd, "rb") as stream:
+                stream = os.fdopen(fd, "rb")
+                try:
                     if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                         raise InvalidRequestError("object must be a regular file")
                     header = json.loads(stream.readline(8192))
-                    obj = StoredObject(**header)
-                    return obj, b"" if metadata_only else stream.read()
+                    return StoredObject(**header), stream
+                except BaseException:
+                    stream.close()
+                    raise
         except FileNotFoundError:
             raise NotFoundError("object not found") from None
         except OSError as exc:
             raise InvalidRequestError("unsafe object path") from exc
+
+    def _read(self, key: str, *, metadata_only: bool = False) -> tuple[StoredObject, bytes]:
+        obj, stream = self._open(key)
+        with stream:
+            return obj, b"" if metadata_only else stream.read()
 
     def _put(self, data: bytes, content_type: str, key: str | None) -> StoredObject:
         digest = hashlib.sha256(data).hexdigest()
@@ -114,6 +125,20 @@ class FileSystemArtifactStore:
 
     async def get(self, key: str) -> bytes:
         return (await asyncio.to_thread(self._read, key))[1]
+
+    async def open_read(
+        self, key: str, *, chunk_size: int = DEFAULT_CHUNK_BYTES
+    ) -> tuple[StoredObject, AsyncIterator[bytes]]:
+        obj, stream = await asyncio.to_thread(self._open, key)
+
+        async def chunks() -> AsyncIterator[bytes]:
+            try:
+                while block := await asyncio.to_thread(stream.read, chunk_size):
+                    yield block
+            finally:
+                stream.close()
+
+        return obj, chunks()
 
     async def stat(self, key: str) -> StoredObject | None:
         try:

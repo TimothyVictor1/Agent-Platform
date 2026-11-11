@@ -29,6 +29,7 @@ from starlette.datastructures import UploadFile
 
 from agentplatform.api.deps import Deps, Tx
 from agentplatform.api.routes._common import load_session
+from agentplatform.artifacts.base import ArtifactStore, StreamingArtifactStore
 from agentplatform.artifacts.service import artifact_name, sniff_mime
 from agentplatform.contracts.api import ArtifactList
 from agentplatform.contracts.artifact import Artifact
@@ -183,6 +184,22 @@ async def upload_artifact(session_id: str, request: Request, deps: Deps) -> Arti
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+async def _open_blob(store: ArtifactStore, key: str) -> tuple[AsyncIterator[bytes], int]:
+    """The stored bytes as chunks and their size. Streams from stores that can
+    (``StreamingArtifactStore``: fs, S3), so a download never holds the whole object
+    in memory; other stores are read once and sliced."""
+    if isinstance(store, StreamingArtifactStore):
+        obj, chunks = await store.open_read(key, chunk_size=CHUNK)
+        return chunks, obj.size_bytes
+    data = await store.get(key)
+
+    async def sliced() -> AsyncIterator[bytes]:
+        for start in range(0, len(data), CHUNK):
+            yield data[start : start + CHUNK]
+
+    return sliced(), len(data)
+
+
 @router.get(
     "/artifacts/{artifact_id}/download",
     response_class=StreamingResponse,
@@ -190,18 +207,13 @@ async def upload_artifact(session_id: str, request: Request, deps: Deps) -> Arti
 )
 async def download_artifact(artifact_id: str, tx: Tx, deps: Deps) -> StreamingResponse:
     artifact = await ArtifactRepository(tx).get(artifact_id)
-    data = await deps.artifacts.get(artifact.storage_key)
-
-    async def chunks() -> AsyncIterator[bytes]:
-        for start in range(0, len(data), CHUNK):
-            yield data[start : start + CHUNK]
-
+    body, size = await _open_blob(deps.artifacts, artifact.storage_key)
     return StreamingResponse(
-        chunks(),
+        body,
         media_type=download_media_type(artifact.mime),
         headers={
             "Content-Disposition": _content_disposition(artifact.name),
-            "Content-Length": str(len(data)),
+            "Content-Length": str(size),
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; sandbox",
             "Cache-Control": "private, max-age=3600",
