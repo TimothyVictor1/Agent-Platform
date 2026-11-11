@@ -228,7 +228,10 @@ def resolve_upstream(
     task: Task, tasks: Mapping[str, Task], artifacts: Mapping[str, Artifact]
 ) -> UpstreamInputs:
     """Values of the task's ``InputRef``s from upstream results, plus the artifacts
-    upstream tasks (dependencies and input sources) produced."""
+    upstream tasks (dependencies and input sources) produced: every artifact published
+    while an upstream task ran (``Artifact.task_key``, in publish order), then the ids
+    its result lists, so an explicitly listed artifact wins a name collision (SPEC
+    §13.3: downstream tasks get the artifacts of their upstream tasks)."""
     values: list[UpstreamValue] = []
     for ref in task.inputs:
         up = tasks.get(ref.from_task)
@@ -240,9 +243,12 @@ def resolve_upstream(
     for key in dict.fromkeys([*task.depends_on, *(r.from_task for r in task.inputs)]):
         up = tasks.get(key)
         if up is not None and up.result is not None:
+            ids.extend(a.id for a in artifacts.values() if a.task_key == key)
             ids.extend(up.result.artifact_ids)
+    # last occurrence wins the order, so listed ids come after the unlisted ones
+    ordered = list(reversed(dict.fromkeys(reversed(ids))))
     return UpstreamInputs(
-        values=values, artifacts=[artifacts[i] for i in dict.fromkeys(ids) if i in artifacts]
+        values=values, artifacts=[artifacts[i] for i in ordered if i in artifacts]
     )
 
 

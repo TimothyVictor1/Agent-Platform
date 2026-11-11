@@ -125,6 +125,43 @@ def test_resolve_upstream_values_and_artifacts() -> None:
     assert resolve_upstream(tasks["T2"], dag({"T1": [], "T2": ["T1"]}), {}).values == []
 
 
+def _artifact(artifact_id: str, task_key: str | None, name: str = "table.csv") -> Artifact:
+    return Artifact(
+        id=artifact_id,
+        session_id="s-test",
+        name=name,
+        mime="text/csv",
+        size_bytes=3,
+        sha256="0" * 64,
+        produced_by=Actor.agent("x", "Ada"),
+        task_key=task_key,
+        storage_key="sha256/00/" + "0" * 64,
+        version=1,
+        created_at=utcnow(),
+    )
+
+
+def test_resolve_upstream_includes_artifacts_published_but_not_listed() -> None:
+    """Regression (T21, scenario 6): an upstream agent that published an artifact but
+    left it out of ``submit_result(artifact_ids=...)`` still hands it downstream."""
+    tasks = dag({"T1": [], "T0": [], "T2": ["T1"]}, T1="done", T0="done")
+    for key, listed in (("T1", ["listed"]), ("T0", [])):
+        tasks[key] = tasks[key].model_copy(
+            update={"result": TaskResult(summary="ok", outputs={}, artifact_ids=listed)}
+        )
+    arts = {
+        "listed": _artifact("listed", "T1"),
+        "unlisted": _artifact("unlisted", "T1", "notes.txt"),
+        "other": _artifact("other", "T0"),  # not an upstream task of T2
+        "user": _artifact("user", None),
+    }
+    up = resolve_upstream(tasks["T2"], tasks, arts)
+    assert [a.id for a in up.artifacts] == ["unlisted", "listed"]  # listed last: wins collisions
+    # nothing before the upstream task has a result
+    pending = dag({"T1": [], "T2": ["T1"]})
+    assert resolve_upstream(pending["T2"], pending, arts).artifacts == []
+
+
 def test_retry_decision() -> None:
     t = make_task(make_tasks({"T1": []})[0])
     assert retry_decision(t, 1, "fail_task: gave up") is True
