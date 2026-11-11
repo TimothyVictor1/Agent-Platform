@@ -593,7 +593,7 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     from agentplatform.artifacts import create_artifact_store
     from agentplatform.artifacts.service import DatabaseArtifactMetadata
     from agentplatform.bus.leases import RedisLeaseStore
-    from agentplatform.bus.redis_bus import RedisEventBus
+    from agentplatform.bus.redis_bus import RedisEventBus, redis_prefix
     from agentplatform.db.event_store import PostgresEventStore
     from agentplatform.db.session import create_engine, create_sessionmaker
     from agentplatform.runtime.controls import RedisControlStore, RedisControlTokenStore
@@ -614,7 +614,8 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     engine = create_engine(settings)
     sm = create_sessionmaker(engine)
     redis = Redis.from_url(settings.effective_redis_url, decode_responses=True)
-    bus = RedisEventBus.from_url(settings.effective_redis_url)
+    prefix = redis_prefix(settings.app_worktree)
+    bus = RedisEventBus.from_url(settings.effective_redis_url, prefix=prefix)
     store = ProjectingEventStore(PostgresEventStore(sm), project_read_models)
     recorder = EventRecorder(store, bus)
     frames = await create_artifact_store(settings)
@@ -622,7 +623,9 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     secrets = settings.secret_values()
 
     docker = DockerLocalProvider.from_settings(
-        settings, RedisControlTokenStore(redis), mem_limit=settings.app_docker_mem_limit
+        settings,
+        RedisControlTokenStore(redis, prefix=prefix),
+        mem_limit=settings.app_docker_mem_limit,
     )
     providers: dict[str, SandboxProvider] = {
         "docker_local": GuardedProvider(docker, secrets=secrets)
@@ -644,15 +647,15 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     return Container(
         store=store,
         bus=bus,
-        leases=RedisLeaseStore(redis),
+        leases=RedisLeaseStore(redis, prefix=prefix),
         recorder=recorder,
         directory=PostgresSessionDirectory(sm),
         frames=frames,
         board=board,
         task_lister=postgres_task_lister(sm),
         approvals=approvals,
-        control_store=RedisControlStore(redis),
-        command_log=RedisCommandLog(redis),
+        control_store=RedisControlStore(redis, prefix=prefix),
+        command_log=RedisCommandLog(redis, prefix=prefix),
         models=models,
         providers=providers,
         policy=policy,

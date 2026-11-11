@@ -44,7 +44,7 @@ from agentplatform.contracts.events import (
     Event,
 )
 
-__all__ = ["RedisEventBus"]
+__all__ = ["RedisEventBus", "redis_prefix"]
 
 log = structlog.get_logger(__name__)
 
@@ -55,6 +55,12 @@ _StreamEntries = list[tuple[str, dict[str, str]]]
 _ReadResponse = list[tuple[str, _StreamEntries]] | None
 """Shape of ``XREAD``/``XREADGROUP`` replies with ``decode_responses=True``."""
 _Streams = dict[Any, Any]
+
+
+def redis_prefix(app_worktree: str) -> str:
+    """Return the Redis namespace for the configured worktree."""
+    worktree = app_worktree.strip()
+    return f"agentplatform-{worktree}" if worktree else "agentplatform"
 
 
 class RedisEventBus:

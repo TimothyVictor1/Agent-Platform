@@ -6,13 +6,21 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 
 import pytest
 from redis.asyncio import Redis
 
-from agentplatform.bus.base import BusRecord, EventBus, agent_queue, session_command_queue
-from agentplatform.bus.redis_bus import RedisEventBus
-from agentplatform.config import load_settings
+from agentplatform.api.deps import build_deps
+from agentplatform.bus.base import (
+    NEW_SESSIONS_QUEUE,
+    BusRecord,
+    EventBus,
+    agent_queue,
+    session_command_queue,
+)
+from agentplatform.bus.redis_bus import RedisEventBus, redis_prefix
+from agentplatform.config import Settings, load_settings
 from agentplatform.contracts.commands import PlanSessionCommand
 from agentplatform.contracts.common import Actor, new_id, utcnow
 from agentplatform.contracts.events import (
@@ -24,6 +32,7 @@ from agentplatform.contracts.events import (
     TaskReady,
     build_event,
 )
+from agentplatform.runtime.container import build_container
 
 pytestmark = pytest.mark.infra
 
@@ -73,6 +82,50 @@ async def take(agen: AsyncIterator[BusRecord], n: int, within: float = 5.0) -> l
 
 def test_implements_protocol(bus: RedisEventBus) -> None:
     assert isinstance(bus, EventBus)
+
+
+def test_empty_worktree_uses_default_redis_prefix() -> None:
+    assert redis_prefix("") == "agentplatform"
+
+
+async def test_worktrees_do_not_consume_each_others_commands(redis: Redis, tmp_path: Path) -> None:
+    base = load_settings()
+    worktrees = [f"test-{new_id()}" for _ in range(2)]
+    async with contextlib.AsyncExitStack() as stack:
+        apis, runtimes = [], []
+        for worktree in worktrees:
+            settings = Settings(
+                app_worktree=worktree,
+                redis_url=base.effective_redis_url,
+                database_url=base.effective_database_url,
+                app_models_file="config/models.example.yaml",
+                app_policies_file="config/policies.example.yaml",
+                artifact_store="fs",
+                artifact_dir=str(tmp_path / worktree),
+                e2b_api_key=None,
+            )
+            api = await build_deps(settings)
+            stack.push_async_callback(api.aclose)
+            runtime = await build_container(settings)
+            stack.push_async_callback(runtime.aclose)
+            apis.append(api)
+            runtimes.append(runtime)
+
+        queue = NEW_SESSIONS_QUEUE  # identical queue name in both worktrees
+        try:
+            for idx, api in enumerate(apis):
+                cmd = command(new_id())
+                await api.commands.send(cmd)
+                assert await runtimes[1 - idx].bus.dequeue(queue, "runtime", timeout_s=0) is None
+                bus = runtimes[idx].bus
+                delivery = await bus.dequeue(queue, "runtime", timeout_s=0)
+                assert delivery is not None
+                assert delivery.item == cmd
+                await bus.ack(delivery)
+        finally:
+            for worktree in worktrees:
+                key = RedisEventBus(redis, prefix=redis_prefix(worktree)).queue_key(queue)
+                await redis.delete(key)
 
 
 # --- session streams --------------------------------------------------------------------

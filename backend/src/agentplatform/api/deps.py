@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agentplatform.api.commands import CommandSender
 from agentplatform.api.health import ModelClientFactory, ProvidersHealthChecker
 from agentplatform.api.metrics import Metrics
-from agentplatform.api.tickets import RedisTicketStore, TicketStore
+from agentplatform.api.tickets import DEFAULT_TICKET_PREFIX, RedisTicketStore, TicketStore
 from agentplatform.artifacts.base import ArtifactStore
 from agentplatform.bus.base import EventBus
 from agentplatform.config import (
@@ -155,7 +155,7 @@ async def build_deps(settings: Settings) -> ApiDeps:
     """Production wiring: Postgres, Redis, configured artifact store and providers."""
     # Imported lazily so tests that pass their own deps never import SDKs/drivers.
     from agentplatform.artifacts import create_artifact_store
-    from agentplatform.bus.redis_bus import RedisEventBus
+    from agentplatform.bus.redis_bus import RedisEventBus, redis_prefix
     from agentplatform.db.event_store import PostgresEventStore
     from agentplatform.db.session import create_engine, create_sessionmaker
     from agentplatform.models.factory import build_client
@@ -167,8 +167,11 @@ async def build_deps(settings: Settings) -> ApiDeps:
     policies = load_policies_config(settings.resolve_path(settings.app_policies_file))
     engine = create_engine(settings)
     sessionmaker = create_sessionmaker(engine)
-    bus = RedisEventBus.from_url(settings.effective_redis_url)
-    tickets = RedisTicketStore.from_url(settings.effective_redis_url)
+    prefix = redis_prefix(settings.app_worktree)
+    bus = RedisEventBus.from_url(settings.effective_redis_url, prefix=prefix)
+    tickets = RedisTicketStore.from_url(
+        settings.effective_redis_url, prefix=f"{prefix}:{DEFAULT_TICKET_PREFIX}"
+    )
     artifacts = await create_artifact_store(settings)
     providers: dict[str, SandboxProvider] = {
         "docker_local": DockerLocalProvider.from_settings(settings)
