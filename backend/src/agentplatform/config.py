@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     app_runtime_id: str = ""
     """Owner name of this runtime process in session leases (default: host-pid-random)."""
     app_docker_mem_limit: str = Field(default="2g", pattern=r"^[1-9][0-9]*[bkmg]$")
+    # docker_local egress: "open" (today's default) or "proxy" (no default route; only
+    # the compose egress-proxy is reachable, docs/security.md)
+    app_sandbox_egress: Literal["open", "proxy"] = "open"
+    app_egress_proxy_container: str = Field(
+        default="agentplatform-egress-proxy-1", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    )
     """Memory (and memory+swap, so no swap) limit of each ``docker_local`` desktop."""
     app_e2b_max_lifetime_min: int = Field(default=60, ge=1, le=24 * 60)
     """Upper bound of an E2B sandbox lifetime; longer requests are capped (warning)."""

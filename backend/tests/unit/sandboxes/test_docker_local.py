@@ -9,6 +9,7 @@ import json
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, cast
 
 import docker
@@ -22,7 +23,10 @@ from agentplatform.contracts.sandbox import SandboxSpec
 from agentplatform.errors import NotSupportedError, SandboxError, SandboxExpiredError
 from agentplatform.sandboxes.base import AgentSandboxSweeper, SandboxHandle, SandboxProvider
 from agentplatform.sandboxes.docker_local import (
+    EGRESS_IMAGE,
+    EGRESS_PROXY_CONTAINER,
     LABEL_AGENT,
+    LABEL_EGRESS_NETWORK,
     LABEL_EXPIRES_AT,
     LABEL_PROVIDER,
     LABEL_SESSION,
@@ -111,6 +115,9 @@ class FakeContainers:
         self.create_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         self.list_filters: list[dict[str, Any]] = []
         self.extra_listed: list[FakeContainer] = []
+        self.by_name: dict[str, FakeContainer] = {}
+        self.run_calls: list[tuple[str, Any, dict[str, Any]]] = []
+        self.run_error: Exception | None = None
 
     def create(self, *args: Any, **kwargs: Any) -> FakeContainer:
         self.create_calls.append((args, kwargs))
@@ -121,7 +128,15 @@ class FakeContainers:
         self.created.append(container)
         return container
 
+    def run(self, image: str, command: Any = None, **kwargs: Any) -> bytes:
+        self.run_calls.append((image, command, kwargs))
+        if self.run_error is not None:
+            raise self.run_error
+        return b""
+
     def get(self, container_id: str) -> FakeContainer:
+        if container_id in self.by_name:
+            return self.by_name[container_id]
         for cid, container in self.by_id.items():
             if cid.startswith(container_id):
                 return container
@@ -139,8 +154,35 @@ class FakeContainers:
 
 
 class FakeNetwork:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, owner: FakeNetworks | None = None, **kwargs: Any) -> None:
         self.name = name
+        self.owner = owner
+        self.kwargs = kwargs
+        self.labels: dict[str, str] = dict(kwargs.get("labels") or {})
+        self.members: dict[str, list[str]] = {}
+        """container id or name -> aliases"""
+        self.removed = False
+
+    @property
+    def attrs(self) -> dict[str, Any]:
+        return {"Labels": self.labels, "Containers": {k: {} for k in self.members}}
+
+    def reload(self) -> None:
+        pass
+
+    def connect(self, container: Any, aliases: list[str] | None = None) -> None:
+        key = getattr(container, "id", None) or str(container)
+        if key in self.members:
+            raise docker.errors.APIError("endpoint already exists in network")
+        self.members[key] = list(aliases or [])
+
+    def disconnect(self, container: str, force: bool = False) -> None:
+        self.members.pop(container, None)
+
+    def remove(self) -> None:
+        self.removed = True
+        if self.owner is not None:
+            self.owner.existing.remove(self)
 
 
 class FakeNetworks:
@@ -149,14 +191,28 @@ class FakeNetworks:
         self.create_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         self.create_error: Exception | None = None
 
-    def list(self, names: list[str] | None = None) -> list[FakeNetwork]:
-        return [n for n in self.existing if names is None or n.name in names]
+    def list(
+        self, names: list[str] | None = None, filters: dict[str, Any] | None = None
+    ) -> list[FakeNetwork]:
+        wanted = dict(item.split("=", 1) for item in (filters or {}).get("label", []))
+        return [
+            n
+            for n in self.existing
+            if (names is None or n.name in names)
+            and builtins.all(n.labels.get(k) == v for k, v in wanted.items())
+        ]
+
+    def get(self, name: str) -> FakeNetwork:
+        for n in self.existing:
+            if n.name == name:
+                return n
+        raise docker.errors.NotFound("No such network")
 
     def create(self, *args: Any, **kwargs: Any) -> FakeNetwork:
         self.create_calls.append((args, kwargs))
         if self.create_error is not None:
             raise self.create_error
-        net = FakeNetwork(args[0])
+        net = FakeNetwork(args[0], self, **kwargs)
         self.existing.append(net)
         return net
 
@@ -1012,3 +1068,133 @@ async def test_mem_limit_applies_to_memory_and_swap(
     (_args, kwargs) = fake_docker.containers.create_calls[0]
     assert kwargs["mem_limit"] == "2g"
     assert kwargs["memswap_limit"] == "2g"
+
+
+# --- egress mode (T21) ----------------------------------------------------------------
+
+
+@pytest.fixture
+def egress_provider(
+    fake_docker: FakeDockerClient, control: FakeControl, store: InMemoryControlTokenStore
+) -> DockerLocalProvider:
+    return DockerLocalProvider(
+        store,
+        worktree=WORKTREE,
+        docker_client=cast(docker.DockerClient, fake_docker),
+        http_transport=httpx.MockTransport(control.handle),
+        ready_timeout_s=0.3,
+        poll_interval_s=0.01,
+        egress="proxy",
+    )
+
+
+def _running_proxy(fake_docker: FakeDockerClient) -> FakeContainer:
+    proxy = FakeContainer(fake_docker, {"labels": {}})
+    proxy.status = "running"
+    fake_docker.containers.by_name[EGRESS_PROXY_CONTAINER] = proxy
+    return proxy
+
+
+async def test_egress_mode_isolates_the_sandbox(
+    egress_provider: DockerLocalProvider, fake_docker: FakeDockerClient
+) -> None:
+    proxy = _running_proxy(fake_docker)
+    handle = await _create(egress_provider, session_id="s1", agent_id="a1")
+    container = fake_docker.containers.created[-1]
+    net_name = container.labels[LABEL_EGRESS_NETWORK]
+    net = fake_docker.networks.get(net_name)
+    assert net.kwargs["internal"] is True
+    assert net.labels[LABEL_WORKTREE] == WORKTREE
+    assert net.members[cast(str, container.id)] == []
+    assert net.members[cast(str, proxy.id)] == ["egress-proxy"]
+    env = container.kwargs["environment"]
+    assert env["HTTPS_PROXY"] == env["http_proxy"] == "http://egress-proxy:3128"
+    # the publishing bridge (loopback ports) stays the primary network
+    assert container.kwargs["network"] == NETWORK_NAME
+    # the default route is removed after start by a NET_ADMIN-only helper
+    image, command, kwargs = fake_docker.containers.run_calls[-1]
+    assert image == EGRESS_IMAGE
+    assert "ip route del default" in command[-1]
+    assert kwargs["network_mode"] == f"container:{container.id}"
+    assert (kwargs["cap_drop"], kwargs["cap_add"]) == (["ALL"], ["NET_ADMIN"])
+    assert container.calls.index("start") >= 0
+    # the sandbox itself is unchanged: no extra capability
+    assert container.kwargs["cap_add"] == ["SETUID", "SETGID"]
+
+    await handle.kill()
+    assert net.removed
+    assert net_name not in [n.name for n in fake_docker.networks.existing]
+
+
+async def test_egress_mode_fails_closed(
+    egress_provider: DockerLocalProvider,
+    fake_docker: FakeDockerClient,
+    store: InMemoryControlTokenStore,
+) -> None:
+    with pytest.raises(SandboxError, match="egress proxy is not running"):
+        await _create(egress_provider)
+    assert fake_docker.containers.created == []
+
+    _running_proxy(fake_docker)
+    helper = cast(Any, object())
+    fake_docker.containers.run_error = docker.errors.ContainerError(
+        helper, 1, "sh", "img", "route left"
+    )
+    with pytest.raises(SandboxError, match="default route"):
+        await _create(egress_provider)
+    container = fake_docker.containers.created[-1]
+    assert container.removed  # never handed out with a route to the host
+    assert cast(str, container.id) not in store
+    assert not [
+        n for n in fake_docker.networks.existing if n.name.startswith("agentplatform-egress-")
+    ]
+
+
+async def test_egress_spec_cannot_override_the_proxy(egress_provider: DockerLocalProvider) -> None:
+    for name in ("HTTP_PROXY", "https_proxy", "NO_PROXY"):
+        with pytest.raises(SandboxError, match="reserved"):
+            await _create(egress_provider, env={name: "http://evil:1"})
+
+
+async def test_dangling_egress_networks_are_swept(
+    egress_provider: DockerLocalProvider, fake_docker: FakeDockerClient
+) -> None:
+    _running_proxy(fake_docker)
+    await _create(egress_provider, session_id="dead")
+    container = fake_docker.containers.created[-1]
+    net_name = container.labels[LABEL_EGRESS_NETWORK]
+    container.removed = True  # removed behind our back (e.g. docker rm)
+    fake_docker.containers.by_id.pop(cast(str, container.id))
+    other = fake_docker.networks.create(
+        "agentplatform-egress-other", labels={LABEL_PROVIDER: "docker_local", LABEL_WORKTREE: "x"}
+    )
+    await egress_provider.cleanup_orphans(set())
+    names = [n.name for n in fake_docker.networks.existing]
+    assert net_name not in names
+    assert other.name in names  # another worktree's network is never touched
+
+
+async def test_connect_reattaches_a_recreated_proxy(
+    egress_provider: DockerLocalProvider, fake_docker: FakeDockerClient
+) -> None:
+    _running_proxy(fake_docker)
+    handle = await _create(egress_provider)
+    net = fake_docker.networks.get(fake_docker.containers.created[-1].labels[LABEL_EGRESS_NETWORK])
+    new_proxy = _running_proxy(fake_docker)  # `compose up` recreated it: no attachments
+    await egress_provider.connect(handle.id)
+    assert net.members[cast(str, new_proxy.id)] == ["egress-proxy"]
+
+
+def test_helper_image_matches_compose() -> None:
+    compose = (Path(__file__).resolve().parents[4] / "docker-compose.yml").read_text()
+    assert f"image: {EGRESS_IMAGE}" in compose
+
+
+def test_settings_choose_egress_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agentplatform.config import Settings
+
+    monkeypatch.setenv("APP_SANDBOX_EGRESS", "proxy")
+    provider = DockerLocalProvider.from_settings(Settings(_env_file=None))
+    assert provider.egress == "proxy"
+    monkeypatch.delenv("APP_SANDBOX_EGRESS")
+    assert DockerLocalProvider.from_settings(Settings(_env_file=None)).egress == "open"

@@ -66,6 +66,31 @@ services:
       timeout: 5s
       retries: 20
 
+  # Egress filter for docker_local sandboxes (APP_SANDBOX_EGRESS=proxy; off by default).
+  # Sandboxes in that mode have no default route; this proxy is the only host they can
+  # reach, and it refuses any destination that resolves to a non-public address
+  # (backend/src/agentplatform/egress/egress_proxy.py, docs/security.md). It publishes
+  # no port; the provider attaches it to each sandbox's own internal network.
+  # Start: docker compose --profile egress up -d egress-proxy
+  egress-proxy:
+    image: python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
+    profiles: ["egress"]
+    command: ["python", "-I", "-B", "/proxy/egress_proxy.py"]
+    environment:
+      EGRESS_LISTEN: "0.0.0.0:3128"
+      EGRESS_ALLOWED_PORTS: "80,443"
+      # exact names that may resolve to private addresses (the eval fixture site)
+      EGRESS_ALLOW_PRIVATE_HOSTS: ${APP_EGRESS_ALLOW_PRIVATE_HOSTS:-eval-fixtures}
+    volumes:
+      - ./backend/src/agentplatform/egress/egress_proxy.py:/proxy/egress_proxy.py:ro
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 128
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

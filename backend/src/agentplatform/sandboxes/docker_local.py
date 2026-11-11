@@ -32,6 +32,7 @@ import re
 import secrets
 import time
 from collections.abc import Callable, Collection, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, TypeVar, cast
@@ -57,8 +58,11 @@ from agentplatform.sandboxes.base import MouseButton, ScrollDirection
 __all__ = [
     "CONTROL_PORT",
     "DEFAULT_IMAGE",
+    "EGRESS_IMAGE",
+    "EGRESS_PROXY_CONTAINER",
     "LABEL_AGENT",
     "LABEL_CREATED_AT",
+    "LABEL_EGRESS_NETWORK",
     "LABEL_EXPIRES_AT",
     "LABEL_MANAGED",
     "LABEL_PROVIDER",
@@ -98,6 +102,23 @@ LABEL_AGENT = "agentplatform.agent"
 LABEL_WORKTREE = "agentplatform.worktree"
 LABEL_CREATED_AT = "agentplatform.created_at"
 LABEL_EXPIRES_AT = "agentplatform.expires_at"
+LABEL_EGRESS_NETWORK = "agentplatform.egress_network"
+
+# Egress mode (T21, docs/security.md known issue 1). Keep EGRESS_IMAGE equal to the
+# egress-proxy image in docker-compose.yml (a unit test checks it); its busybox ``ip``
+# also removes the sandbox's default route.
+EgressMode = Literal["open", "proxy"]
+EGRESS_IMAGE = (
+    "python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7"
+)
+EGRESS_PROXY_CONTAINER = "agentplatform-egress-proxy-1"
+EGRESS_PROXY_ALIAS = "egress-proxy"
+EGRESS_PROXY_URL = f"http://{EGRESS_PROXY_ALIAS}:3128"
+EGRESS_NETWORK_PREFIX = "agentplatform-egress-"
+_DROP_ROUTES = (
+    "ip route del default 2>/dev/null; ip -6 route del default 2>/dev/null; "
+    "! ip route | grep -q '^default' && ! ip -6 route 2>/dev/null | grep -q '^default'"
+)
 
 # Env names the image/entrypoint/control server read; ``spec.env`` must not set them.
 RESERVED_ENV = frozenset(
@@ -113,6 +134,10 @@ RESERVED_ENV = frozenset(
         "HOME",
         "USER",
         "PATH",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
     }
 )
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -264,8 +289,14 @@ class DockerLocalProvider:
         http_transport: httpx.AsyncBaseTransport | None = None,
         poll_interval_s: float = 0.5,
         mem_limit: str = MEM_LIMIT,
+        egress: EgressMode = "open",
+        egress_proxy_container: str = EGRESS_PROXY_CONTAINER,
+        egress_image: str = EGRESS_IMAGE,
     ) -> None:
         self._mem_limit = mem_limit
+        self._egress: EgressMode = egress
+        self._egress_proxy = egress_proxy_container
+        self._egress_image = egress_image
         self._tokens: ControlTokenStore = (
             token_store if token_store is not None else InMemoryControlTokenStore()
         )
@@ -284,6 +315,8 @@ class DockerLocalProvider:
     def from_settings(
         cls, settings: Settings, token_store: ControlTokenStore | None = None, **kwargs: Any
     ) -> DockerLocalProvider:
+        kwargs.setdefault("egress", settings.app_sandbox_egress)
+        kwargs.setdefault("egress_proxy_container", settings.app_egress_proxy_container)
         return cls(token_store, worktree=settings.app_worktree, **kwargs)
 
     @property
@@ -297,6 +330,10 @@ class DockerLocalProvider:
     @property
     def image(self) -> str:
         return self._image
+
+    @property
+    def egress(self) -> EgressMode:
+        return self._egress
 
     # -- docker plumbing --------------------------------------------------------------
 
@@ -375,29 +412,42 @@ class DockerLocalProvider:
             "SCREEN_WIDTH": str(width),
             "SCREEN_HEIGHT": str(height),
         }
+        egress_net: Any = None
+        if self._egress == "proxy":
+            proxy = await self._egress_proxy_container()
+            egress_net = await self._create_egress_network(spec)
+            labels[LABEL_EGRESS_NETWORK] = egress_net.name
+            for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                environment[name] = EGRESS_PROXY_URL
+            environment["NO_PROXY"] = environment["no_proxy"] = "localhost,127.0.0.1,::1"
         # ("127.0.0.1", None): bind on loopback only, Docker picks a free host port.
         ports = cast(
             "dict[str, tuple[str, int]]",
             {f"{CONTROL_PORT}/tcp": ("127.0.0.1", None), f"{NOVNC_PORT}/tcp": ("127.0.0.1", None)},
         )
-        container = await self._call(
-            "create sandbox",
-            client.containers.create,
-            self._image,
-            detach=True,
-            environment=environment,
-            labels=labels,
-            ports=ports,
-            network=self._network,
-            cap_drop=list(CAP_DROP),
-            cap_add=list(CAP_ADD),
-            security_opt=list(SECURITY_OPT),
-            mem_limit=self._mem_limit,
-            memswap_limit=self._mem_limit,  # equal to mem_limit: no swap
-            nano_cpus=NANO_CPUS,
-            pids_limit=PIDS_LIMIT,
-            privileged=False,
-        )
+        try:
+            container = await self._call(
+                "create sandbox",
+                client.containers.create,
+                self._image,
+                detach=True,
+                environment=environment,
+                labels=labels,
+                ports=ports,
+                network=self._network,
+                cap_drop=list(CAP_DROP),
+                cap_add=list(CAP_ADD),
+                security_opt=list(SECURITY_OPT),
+                mem_limit=self._mem_limit,
+                memswap_limit=self._mem_limit,  # equal to mem_limit: no swap
+                nano_cpus=NANO_CPUS,
+                pids_limit=PIDS_LIMIT,
+                privileged=False,
+            )
+        except BaseException:
+            if egress_net is not None:
+                await self._remove_egress_network(egress_net.name)
+            raise
         sandbox_id = container.id
         if sandbox_id is None:  # pragma: no cover - the SDK always sets it
             raise SandboxError("docker returned a container without an id")
@@ -407,7 +457,12 @@ class DockerLocalProvider:
         handle: DockerLocalHandle | None = None
         try:
             await self._tokens.put(sandbox_id, token)
+            if egress_net is not None:
+                await self._call("attach egress network", egress_net.connect, container)
+                await self._attach_proxy(egress_net.name, proxy)
             await self._call("start sandbox", container.start)
+            if egress_net is not None:
+                await self._drop_default_route(sandbox_id)
             endpoints = await self._wait_for_ports(container)
             handle = DockerLocalHandle(
                 provider=self,
@@ -425,6 +480,124 @@ class DockerLocalProvider:
             raise SandboxError(f"sandbox create failed: {type(exc).__name__}") from exc
         bound.info("sandbox_created", control_port=endpoints.control_port)
         return handle
+
+    # -- egress mode ----------------------------------------------------------------
+
+    async def _egress_proxy_container(self) -> Container:
+        """The running egress proxy, or ``SandboxError`` (fail closed)."""
+        client = await self._client()
+        try:
+            proxy = await asyncio.to_thread(client.containers.get, self._egress_proxy)
+        except docker.errors.NotFound:
+            proxy = None
+        except docker.errors.DockerException as exc:
+            raise _docker_error(exc, "look up the egress proxy") from exc
+        if proxy is None or proxy.status != "running":
+            raise SandboxError(
+                "APP_SANDBOX_EGRESS=proxy but the egress proxy is not running; start it "
+                "with `docker compose --profile egress up -d egress-proxy`"
+            )
+        return proxy
+
+    async def _create_egress_network(self, spec: SandboxSpec) -> Any:
+        """An internal network (no route anywhere) for one sandbox and the proxy."""
+        client = await self._client()
+        return await self._call(
+            "create egress network",
+            client.networks.create,
+            f"{EGRESS_NETWORK_PREFIX}{secrets.token_hex(6)}",
+            driver="bridge",
+            internal=True,
+            labels={
+                LABEL_MANAGED: "1",
+                LABEL_PROVIDER: PROVIDER_NAME,
+                LABEL_WORKTREE: self._worktree,
+                LABEL_SESSION: spec.session_id or "",
+                LABEL_AGENT: spec.agent_id or "",
+            },
+        )
+
+    async def _attach_proxy(self, network_name: str, proxy: Container | None = None) -> None:
+        """Connect the proxy to a sandbox's egress network (idempotent)."""
+        client = await self._client()
+        proxy = proxy or await self._egress_proxy_container()
+        network = await self._call("look up egress network", client.networks.get, network_name)
+        try:
+            await asyncio.to_thread(network.connect, proxy, aliases=[EGRESS_PROXY_ALIAS])
+        except docker.errors.APIError as exc:
+            if exc.status_code not in (403, 409) and "already exists" not in str(exc):
+                raise _docker_error(exc, "attach the egress proxy") from exc
+
+    async def _drop_default_route(self, sandbox_id: str) -> None:
+        """Remove the sandbox's default routes with a short-lived helper sharing its
+        network namespace (NET_ADMIN only for the helper; the sandbox keeps every
+        capability dropped and cannot add a route back). Raises if any default route
+        is left, so ``create`` discards the sandbox (fail closed)."""
+        client = await self._client()
+        try:
+            await asyncio.to_thread(
+                client.containers.run,
+                self._egress_image,
+                ["sh", "-c", _DROP_ROUTES],
+                network_mode=f"container:{sandbox_id}",
+                cap_drop=["ALL"],
+                cap_add=["NET_ADMIN"],
+                security_opt=list(SECURITY_OPT),
+                labels={LABEL_MANAGED: "1", LABEL_WORKTREE: self._worktree},
+                remove=True,
+                detach=False,
+            )
+        except docker.errors.ContainerError as exc:
+            raise SandboxError("could not remove the sandbox's default route") from exc
+        except docker.errors.DockerException as exc:
+            raise _docker_error(exc, "isolate the sandbox network") from exc
+
+    async def _remove_egress_network(self, name: str | None) -> None:
+        """Disconnect everything from a sandbox's egress network and remove it.
+        Never raises (logged)."""
+        if not name or not name.startswith(EGRESS_NETWORK_PREFIX):
+            return
+        try:
+            client = await self._client()
+            network = await asyncio.to_thread(client.networks.get, name)
+            if network.attrs.get("Labels", {}).get(LABEL_WORKTREE) != self._worktree:
+                return
+            await asyncio.to_thread(network.reload)
+            for cid in list(network.attrs.get("Containers") or {}):
+                with suppress(docker.errors.DockerException):
+                    await asyncio.to_thread(network.disconnect, cid, force=True)
+            await asyncio.to_thread(network.remove)
+        except docker.errors.NotFound:
+            return
+        except Exception as exc:
+            log.warning("egress_network_remove_failed", network=name, error=type(exc).__name__)
+
+    async def _remove_dangling_egress_networks(self) -> list[str]:
+        """Egress networks of this worktree whose sandbox is gone."""
+        client = await self._client()
+        networks = await self._call(
+            "list egress networks",
+            client.networks.list,
+            filters={
+                "label": [f"{LABEL_PROVIDER}={PROVIDER_NAME}", f"{LABEL_WORKTREE}={self._worktree}"]
+            },
+        )
+        containers = await self._call(
+            "list sandboxes",
+            client.containers.list,
+            all=True,
+            filters={
+                "label": [f"{LABEL_PROVIDER}={PROVIDER_NAME}", f"{LABEL_WORKTREE}={self._worktree}"]
+            },
+        )
+        used = {c.labels.get(LABEL_EGRESS_NETWORK) for c in containers}
+        removed = []
+        for network in networks:
+            name = network.name or ""
+            if name.startswith(EGRESS_NETWORK_PREFIX) and name not in used:
+                await self._remove_egress_network(name)
+                removed.append(name)
+        return removed
 
     def _validate_spec(self, spec: SandboxSpec) -> tuple[int, int]:
         if spec.network != "open":
@@ -473,6 +646,7 @@ class DockerLocalProvider:
             await self._tokens.delete(sandbox_id)
         except Exception as exc:
             log.warning("sandbox_token_cleanup_failed", error=type(exc).__name__)
+        await self._remove_egress_network(container.labels.get(LABEL_EGRESS_NETWORK))
 
     async def connect(self, sandbox_id: str) -> DockerLocalHandle:
         if not sandbox_id or not re.fullmatch(r"[0-9a-f]{12,64}", sandbox_id):
@@ -486,6 +660,14 @@ class DockerLocalProvider:
             raise SandboxExpiredError(
                 f"no control token stored for sandbox {full_id[:12]}; it cannot be controlled"
             )
+        egress_name = container.labels.get(LABEL_EGRESS_NETWORK)
+        if egress_name:
+            # a recreated proxy loses its attachments; without it the sandbox has no
+            # network at all (fail closed), so re-attach when the proxy is running
+            try:
+                await self._attach_proxy(egress_name)
+            except SandboxError as exc:
+                log.warning("egress_proxy_reattach_failed", error=str(exc)[:200])
         paused = container.status == "paused"
         control, novnc = (
             _host_port(container.ports, CONTROL_PORT),
@@ -583,6 +765,10 @@ class DockerLocalProvider:
                 session_id=session or None,
                 expired=expired,
             )
+        try:
+            await self._remove_dangling_egress_networks()
+        except SandboxError as exc:
+            log.warning("egress_network_sweep_failed", error=str(exc)[:200])
         return removed
 
     async def remove_agent_sandboxes(
@@ -637,6 +823,7 @@ class DockerLocalProvider:
             log.warning(failure_event, sandbox_id=str(container.id)[:12], error=str(exc)[:200])
             return False
         await self._tokens.delete(container.id)
+        await self._remove_egress_network(container.labels.get(LABEL_EGRESS_NETWORK))
         return True
 
     def _http_client(self, endpoints: _Endpoints, token: str) -> httpx.AsyncClient:
@@ -1101,6 +1288,9 @@ class DockerLocalHandle:
                 raise _docker_error(exc, "kill sandbox") from exc
             self._killed = True
             await self._provider._tokens.delete(self._id)
+            await self._provider._remove_egress_network(
+                self._container.labels.get(LABEL_EGRESS_NETWORK)
+            )
             await self.aclose()
             log.info("sandbox_killed", sandbox_id=self._id[:12])
 
