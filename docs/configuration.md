@@ -108,6 +108,14 @@ Inlined by Next.js at build/dev start, so restart the dev server after changing 
 | `NEXT_PUBLIC_MOCK` | `0` | `1` runs the UI purely on fixtures from `frontend/src/mocks/` (scripted session, no backend needed) — for UI development and demos without a model. |
 | `NEXT_PUBLIC_APP_NAME` | `Agent Platform` | App title in the top navigation. |
 
+### Sandbox egress (`docker_local`)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `APP_SANDBOX_EGRESS` | `open` | `open`: sandboxes have normal network access (and on Docker Desktop can reach host services). `proxy`: each sandbox has no default route and reaches only the compose `egress-proxy`, which refuses non-public destinations. Start the proxy first with `docker compose --profile egress up -d egress-proxy`; without it, sandbox creation fails. See `docs/security.md`. |
+| `APP_EGRESS_PROXY_CONTAINER` | `agentplatform-egress-proxy-1` | Name of the proxy container the provider attaches to each sandbox's internal network. |
+| `APP_EGRESS_ALLOW_PRIVATE_HOSTS` | `eval-fixtures` | Read by the compose proxy service: exact names that may resolve to private (never loopback or link-local) addresses. |
+
 ### Test flags
 
 | Variable | Default | What it does |

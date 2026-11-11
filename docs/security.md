@@ -1,7 +1,7 @@
 # Security review (T21)
 
-Review against SPEC §15 and AGENTS.md §5. Status: **in progress**. The egress proxy
-(known issue 1) is designed and verified by hand on Docker Desktop but not implemented yet.
+Review against SPEC §15 and AGENTS.md §5. Status: done. Egress filtering for known
+issue 1 is implemented and verified, but **off by default** until you turn it on.
 
 ## Fixed in T21
 
@@ -27,21 +27,47 @@ Review against SPEC §15 and AGENTS.md §5. Status: **in progress**. The egress 
 
 ## Known issues
 
-1. **High. Sandboxes reach host Postgres/Redis on Docker Desktop.** Without `APP_API_TOKEN`, a prompt-injected agent could also call the API (for example to approve its own approval request), because requests without an `Origin` header pass the origin check. Probes run on 2026-11-11 (Docker 28.3):
-   - An `--internal` network blocks the host and the internet, **but published ports stop working**, so it cannot be the only network.
-   - Two networks (internal plus the publishing bridge) give a default route through the bridge, so egress is open again.
-   - Removing the default route with a short-lived helper (`--network container:<id> --cap-add NET_ADMIN ip route del default`) works:
-     - published ports still work;
-     - host.docker.internal:5434/6379, the bridge gateway and 1.1.1.1 are all blocked, including ports published on 0.0.0.0;
-     - the container cannot add the route back.
+1. **High. Sandboxes reach host Postgres/Redis on Docker Desktop.** Without
+   `APP_API_TOKEN`, a prompt-injected agent could also call the API (for example to
+   approve its own approval request), because requests without an `Origin` header pass
+   the origin check.
 
-   **Planned design (behind a setting that is off by default):**
-   - A per-sandbox internal network that holds only the sandbox and an `egress-proxy` compose service (stdlib Python, pinned image, read-only, all capabilities dropped).
-   - The proxy resolves each destination, refuses private, loopback, link-local, CGNAT 100.64/10, multicast and IPv6 equivalents (including mapped, 6to4 and NAT64), `*.internal` and `localhost`, then connects to the vetted IP (no re-resolve). Only ports 80 and 443 are allowed.
-   - `HTTP(S)_PROXY` is set in the sandbox. Firefox has to be checked against `firefox-policies.json`.
-   - Fail closed if the route removal fails.
+   **Fix (opt-in): `APP_SANDBOX_EGRESS=proxy`** plus the compose `egress-proxy` service.
+   Details in [sandboxes.md → Egress mode](sandboxes.md). In short: a per-sandbox internal
+   network shared only with the proxy, the sandbox's default route removed by a NET_ADMIN
+   helper (the sandbox keeps all capabilities dropped), and a proxy that resolves each
+   name once, refuses any non-public address (including CGNAT and IPv6-wrapped ones) and
+   connects to the vetted address. It fails closed when the proxy is missing or the route
+   cannot be removed.
 
-   **Until then:** always set `APP_API_TOKEN`, use strong DB/Redis passwords, and prefer `e2b` for untrusted content.
+   Why this design: probes on Docker Desktop 28.3 showed that an `--internal` network
+   alone breaks the published control/noVNC ports, `gateway_mode_ipv4=isolated` is
+   allowed only on internal networks, and a second network brings the default route
+   back.
+
+   **Verified 2026-11-11** inside a real desktop:
+
+   | Probe | Result |
+   |---|---|
+   | direct TCP `host.docker.internal:5434`, `:6379` | refused |
+   | direct TCP `192.168.65.254:5434`, `:6379` | refused |
+   | direct TCP `1.1.1.1:443` | refused |
+   | `curl https://example.com` (through the proxy) | 200 |
+   | Firefox headless `https://example.com` | page rendered |
+   | host Postgres/Redis through the proxy | 403 |
+   | `example.com:6379` | 403 (port) |
+   | `curl --noproxy '*' https://example.com` | no connection |
+
+   No containers or networks were left after the kill.
+
+   **Residual risk:**
+   - in the default `open` mode nothing changes;
+   - in `proxy` mode the sandbox keeps its default route for the moment between start and
+     route removal, while the desktop boots and before any agent action;
+   - allowed public destinations are unrestricted, as SPEC's `network: open` intends;
+   - `eval-fixtures` may resolve to a private address (never loopback).
+
+   Keep `APP_API_TOKEN` and strong DB/Redis passwords in either mode.
 2. **`NEXT_PUBLIC_API_TOKEN` ships in the browser bundle.** Anyone who can load the UI can read the token. Treat it as local-only. The real fix is server-side sessions or a BFF (follow-up).
 3. **noVNC (6080) has no password.** Its only protection is the 127.0.0.1 binding and ICC being disabled. Adding a per-container VNC password needs a change to `sandbox-image/` (follow-up).
 4. **The control token is visible in `docker inspect`** (`Config.Env`). Docker socket access is root-equivalent anyway. The token only guards that one container's control API. Passing it with `put_archive` before start is a follow-up.

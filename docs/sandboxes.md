@@ -154,7 +154,8 @@ runtime should call it at startup and periodically. When a worktree is removed,
     connections.
 
   Agent-controlled code inside a sandbox can therefore try to connect to the
-  platform's own database, Redis, MinIO and API. Until egress filtering exists:
+  platform's own database, Redis, MinIO and API. **Egress mode** (`APP_SANDBOX_EGRESS=proxy`,
+  off by default) closes this: see "Egress mode" below. Without it:
   - Keep strong authentication on every host service. Never rely on "it only
     listens on localhost" for anything a sandbox must not touch.
   - Do not run unrelated sensitive local services (unauthenticated databases, dev
@@ -170,6 +171,35 @@ runtime should call it at startup and periodically. When a worktree is removed,
 - **Untrusted output.** Screenshots, command output, file contents and error details
   come from an environment the model controls. The host never executes anything
   from a sandbox.
+
+## Egress mode (`APP_SANDBOX_EGRESS=proxy`)
+
+Opt-in (T21). Start the proxy once: `docker compose --profile egress up -d egress-proxy`.
+
+- Each sandbox stays on `agentplatform-sandboxes` (ICC off) for its loopback-published
+  control and noVNC ports, and also joins its own **internal** network
+  `agentplatform-egress-<random>`, shared only with the proxy (alias `egress-proxy`).
+- Right after start, a short-lived helper container (the pinned proxy image, `NET_ADMIN`
+  only, `--network container:<sandbox>`) deletes the sandbox's default routes and checks
+  that none is left. The sandbox keeps every capability dropped, so it cannot add a route
+  back. If the helper fails, the sandbox is removed (fail closed).
+- `HTTP(S)_PROXY`/`http(s)_proxy` point at `http://egress-proxy:3128`; curl, pip and
+  Firefox (system proxy setting) use it. `spec.env` cannot override these variables.
+- The proxy (`agentplatform/egress/egress_proxy.py`, stdlib only) allows ports 80/443,
+  refuses local names (`localhost`, `*.internal`, `*.local`, single-label names),
+  resolves each name once, requires **every** answer to be a public address (no private,
+  loopback, link-local, CGNAT, multicast or reserved address, also inside IPv6
+  wrappers) and connects to the vetted address itself (no DNS rebinding).
+- On kill/removal the sandbox's egress network is removed; `cleanup_orphans` also sweeps
+  egress networks whose sandbox is gone. `connect()` re-attaches a recreated proxy.
+
+Verified on Docker Desktop 28.3 (2026-11-11), from inside a real desktop: direct TCP to
+`host.docker.internal:5434/6379`, `192.168.65.254:5434/6379` and `1.1.1.1:443` refused; via
+the proxy `https://example.com` → 200 (also in Firefox), host Postgres/Redis → 403,
+`example.com:6379` → 403; `--noproxy '*'` → no connection.
+
+Residual: between container start and route removal (well under a second, while the
+desktop boots and before any agent action) the sandbox still has its default route.
 
 ## Known issues
 
