@@ -12,9 +12,11 @@ create them once in ``main.py`` and inject them (no global singletons).
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, Self
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
@@ -156,7 +158,26 @@ class Settings(BaseSettings):
             self.app_pg_password,
             self.app_redis_password,
         ]
-        return [s.get_secret_value() for s in secrets if s and s.get_secret_value()]
+        values = [s.get_secret_value() for s in secrets if s and s.get_secret_value()]
+        for url in (self.database_url, self.redis_url):
+            password = urlsplit(url).password if url else None
+            if password:
+                values.append(unquote(password))
+        return list(dict.fromkeys(values))
+
+
+def model_key_values(models: ModelsConfig, env: Mapping[str, str] | None = None) -> list[str]:
+    """Values of every variable a model profile names in ``api_key_env`` (e.g. a
+    provider key that ``Settings`` has no field for), for the same leak checks as
+    ``Settings.secret_values``. Never log these."""
+    source = os.environ if env is None else env
+    names = {
+        role.api_key_env
+        for profile in models.profiles.values()
+        for role in (profile.planner, profile.supervisor, profile.agent, profile.summarizer)
+        if role.api_key_env
+    }
+    return [v for v in (source.get(n, "").strip() for n in sorted(names)) if v]
 
 
 def _with_password(url: str, password: SecretStr | None) -> str:

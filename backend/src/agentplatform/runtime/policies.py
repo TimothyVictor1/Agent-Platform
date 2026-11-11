@@ -319,6 +319,21 @@ def _contains(haystack: str, secret: str) -> bool:
     return haystack == secret if len(secret) < _SHORT_SECRET_CHARS else secret in haystack
 
 
+def contains_secret(value: str | bytes, secrets: Sequence[str]) -> bool:
+    """Whether ``value`` carries one of ``secrets`` (short secrets only as the whole
+    value, to avoid false positives on common words)."""
+    for secret in secrets:
+        if not secret:
+            continue
+        if isinstance(value, bytes):
+            raw = secret.encode()
+            if value == raw if len(secret) < _SHORT_SECRET_CHARS else raw in value:
+                return True
+        elif _contains(value, secret):
+            return True
+    return False
+
+
 def env_file_tracked(repo_root: Path, timeout_s: float = 5.0) -> bool | None:
     """Whether ``.env`` is tracked by git in ``repo_root`` (``None``: unknown, e.g.
     git missing or not a repository). Runs a fixed argv, no shell."""

@@ -138,3 +138,38 @@ def test_runtime_settings_defaults_and_validation(monkeypatch: pytest.MonkeyPatc
         Settings(_env_file=None, app_docker_mem_limit="lots")
     with pytest.raises(ValidationError):
         Settings(_env_file=None, app_e2b_max_lifetime_min=0)
+
+
+def test_secret_values_include_url_passwords() -> None:
+    """T21: a password written straight into DATABASE_URL/REDIS_URL is a secret too."""
+    s = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:pg%2Fsecret-1@db:5432/x",  # gitleaks:allow
+        redis_url="redis://:redis-secret-2@cache:6379/0",  # gitleaks:allow
+    )
+    values = s.secret_values()
+    assert "pg/secret-1" in values  # gitleaks:allow
+    assert "redis-secret-2" in values  # gitleaks:allow
+    assert len(values) == len(set(values))
+
+
+def test_model_key_values_reads_every_api_key_env() -> None:
+    """T21: keys of profiles whose variable Settings has no field for (e.g. a new
+    provider) are found for the sandbox leak checks."""
+    from agentplatform.config import ModelsConfig, model_key_values
+
+    role = {"provider": "openai_compatible", "base_url": "https://x.test/v1", "model": "m"}
+    models = ModelsConfig.model_validate(
+        {
+            "profiles": {
+                "p": {
+                    "planner": {**role, "api_key_env": "NEW_PROVIDER_KEY"},
+                    "supervisor": {**role, "api_key_env": "NEW_PROVIDER_KEY"},
+                    "agent": {**role, "vision": True, "api_key_env": "OTHER_KEY"},
+                    "summarizer": {**role, "api_key_env": "UNSET_KEY"},
+                }
+            }
+        }
+    )
+    env = {"NEW_PROVIDER_KEY": "np-123456789", "OTHER_KEY": " ok-987654321 "}  # gitleaks:allow
+    assert model_key_values(models, env) == ["np-123456789", "ok-987654321"]  # gitleaks:allow

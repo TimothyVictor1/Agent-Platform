@@ -34,17 +34,23 @@ import json
 from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import structlog
 from redis.asyncio import Redis
 
 from agentplatform.contracts.common import HealthStatus, SandboxProviderName
-from agentplatform.contracts.sandbox import SandboxSpec
-from agentplatform.errors import ConflictError, NotFoundError
+from agentplatform.contracts.sandbox import CommandResult, FileInfo, SandboxSpec, StreamUrls
+from agentplatform.errors import ConflictError, NotFoundError, SandboxError
 from agentplatform.runtime.agent.loop import ControlMode, LocalControlState
-from agentplatform.runtime.policies import check_secret_hygiene
-from agentplatform.sandboxes.base import AgentSandboxSweeper, SandboxHandle, SandboxProvider
+from agentplatform.runtime.policies import check_secret_hygiene, contains_secret
+from agentplatform.sandboxes.base import (
+    AgentSandboxSweeper,
+    MouseButton,
+    SandboxHandle,
+    SandboxProvider,
+    ScrollDirection,
+)
 
 __all__ = [
     "HOLDS",
@@ -56,6 +62,7 @@ __all__ = [
     "InMemoryControlStore",
     "RedisControlStore",
     "RedisControlTokenStore",
+    "SecretGuardHandle",
     "effective_mode",
 ]
 
@@ -452,12 +459,15 @@ class GuardedProvider:
         spec = self.capped(spec)
         token = _SANDBOX_LIFETIME_S.set(spec.timeout_minutes * 60.0)
         try:
-            return await self.inner.create(spec)
+            return self._guard(await self.inner.create(spec))
         finally:
             _SANDBOX_LIFETIME_S.reset(token)
 
     async def connect(self, sandbox_id: str) -> SandboxHandle:
-        return await self.inner.connect(sandbox_id)
+        return self._guard(await self.inner.connect(sandbox_id))
+
+    def _guard(self, handle: SandboxHandle) -> SandboxHandle:
+        return SecretGuardHandle(handle, self._secrets) if self._secrets else handle
 
     async def health(self) -> HealthStatus:
         return await self.inner.health()
@@ -469,3 +479,85 @@ class GuardedProvider:
         if not isinstance(self.inner, AgentSandboxSweeper):
             return []
         return await self.inner.remove_agent_sandboxes(session_id, agent_id, keep=keep)
+
+
+class SecretGuardHandle:
+    """``SandboxHandle`` that never sends a configured secret into the sandbox
+    (AGENTS.md §5: no API keys in sandbox env, files or commands). ``run_command``,
+    ``type_text`` and ``write_file`` whose argument carries a secret raise
+    ``SandboxError`` before anything is sent; the message never contains the secret.
+    Everything else is passed through (provider-specific extras via ``__getattr__``).
+    """
+
+    def __init__(self, inner: SandboxHandle, secrets: Sequence[str]) -> None:
+        self.inner = inner
+        self._secrets = [s for s in secrets if s]
+
+    def _refuse_secret(self, what: str, value: str | bytes) -> None:
+        if contains_secret(value, self._secrets):
+            log.warning("sandbox_secret_refused", call=what, sandbox_id=self.inner.id)
+            raise SandboxError(f"refused: the {what} contains a configured secret")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    @property
+    def id(self) -> str:
+        return self.inner.id
+
+    @property
+    def provider(self) -> SandboxProviderName:
+        return self.inner.provider
+
+    @property
+    def screen_size(self) -> tuple[int, int]:
+        return self.inner.screen_size
+
+    async def screenshot(self) -> bytes:
+        return await self.inner.screenshot()
+
+    async def click(self, x: int, y: int, button: MouseButton = "left", count: int = 1) -> None:
+        await self.inner.click(x, y, button, count)
+
+    async def move(self, x: int, y: int) -> None:
+        await self.inner.move(x, y)
+
+    async def drag(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        await self.inner.drag(x1, y1, x2, y2)
+
+    async def scroll(self, x: int, y: int, direction: ScrollDirection, amount: int) -> None:
+        await self.inner.scroll(x, y, direction, amount)
+
+    async def type_text(self, text: str, interval_ms: int = 10) -> None:
+        self._refuse_secret("typed text", text)
+        await self.inner.type_text(text, interval_ms)
+
+    async def key(self, combo: str) -> None:
+        await self.inner.key(combo)
+
+    async def run_command(self, cmd: str, timeout_s: int = 60) -> CommandResult:
+        self._refuse_secret("command", cmd)
+        return await self.inner.run_command(cmd, timeout_s)
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self._refuse_secret("file", data)
+        self._refuse_secret("file path", path)
+        await self.inner.write_file(path, data)
+
+    async def read_file(self, path: str, max_bytes: int = 50_000_000) -> bytes:
+        return await self.inner.read_file(path, max_bytes)
+
+    async def list_dir(self, path: str) -> list[FileInfo]:
+        return await self.inner.list_dir(path)
+
+    async def stream_urls(self) -> StreamUrls:
+        return await self.inner.stream_urls()
+
+    async def pause(self) -> None:
+        await self.inner.pause()
+
+    async def resume(self) -> None:
+        await self.inner.resume()
+
+    async def kill(self) -> None:
+        await self.inner.kill()

@@ -43,6 +43,7 @@ from agentplatform.config import (
     Settings,
     load_models_config,
     load_policies_config,
+    model_key_values,
 )
 from agentplatform.contracts.agent import Agent
 from agentplatform.contracts.artifact import Artifact
@@ -632,7 +633,8 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     recorder = EventRecorder(store, bus)
     frames = await create_artifact_store(settings)
     board = PostgresBoardService(sm, recorder)
-    secrets = settings.secret_values()
+    # model keys named by api_key_env count too (T21: e.g. a provider Settings lacks)
+    secrets = list(dict.fromkeys([*settings.secret_values(), *model_key_values(models_cfg)]))
 
     docker = DockerLocalProvider.from_settings(
         settings,
