@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import asyncio
 
+from runtime.support import Behavior, payload
+
 from agentplatform.contracts.events import BoardEntryPosted
 from agentplatform.contracts.model_io import ModelResponse
-
-from runtime.support import Behavior, payload
 from scenarios.harness import ScenarioWorld, gate, multi_tool_response, shell
 
 

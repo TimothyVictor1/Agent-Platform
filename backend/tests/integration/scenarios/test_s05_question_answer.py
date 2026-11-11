@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import asyncio
 
-from agentplatform.contracts.events import BoardEntryPosted, BoardEntryStatusChanged
-
 from runtime.support import Behavior, payload
+
+from agentplatform.contracts.events import BoardEntryPosted, BoardEntryStatusChanged
 from scenarios.harness import ScenarioWorld, ScriptedSupervisor, gate, multi_tool_response, shell
 
 

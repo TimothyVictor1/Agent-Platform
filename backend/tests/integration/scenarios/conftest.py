@@ -27,3 +27,8 @@ async def world() -> AsyncIterator[object]:
     w = ScenarioWorld()
     yield w
     await w.close()
+
+
+# Postgres fixtures of the runtime tests (throwaway migrated database per run; only
+# created when an ``infra`` test asks for them).
+from runtime.conftest import database_url, engine, sessionmaker  # noqa: E402, F401

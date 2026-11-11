@@ -3,9 +3,9 @@ context (the "Upstream inputs" block of its system prompt)."""
 
 from __future__ import annotations
 
-from agentplatform.contracts.events import TaskAccepted, TaskStarted
-
 from runtime.support import Behavior, payload
+
+from agentplatform.contracts.events import TaskAccepted, TaskStarted
 from scenarios.harness import ScenarioWorld, submit
 
 

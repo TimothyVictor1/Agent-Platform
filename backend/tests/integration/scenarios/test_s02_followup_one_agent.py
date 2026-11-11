@@ -3,10 +3,10 @@ exactly one agent; no agent or sandbox is re-created."""
 
 from __future__ import annotations
 
+from runtime.support import payload, until
+
 from agentplatform.contracts.events import SessionPlanProposed, TaskAssigned, TaskStarted
 from agentplatform.testing import make_tasks
-
-from runtime.support import payload, until
 from scenarios.harness import ScenarioWorld
 
 

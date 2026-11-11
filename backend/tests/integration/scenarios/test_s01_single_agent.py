@@ -6,9 +6,9 @@ with a gap-free log and stored frames."""
 
 from __future__ import annotations
 
-from agentplatform.contracts.events import TaskAccepted, TaskResultSubmitted
-
 from runtime.support import payload
+
+from agentplatform.contracts.events import TaskAccepted, TaskResultSubmitted
 from scenarios.harness import ScenarioWorld, submit, tool_response
 
 

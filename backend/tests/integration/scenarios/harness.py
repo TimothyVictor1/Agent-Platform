@@ -17,9 +17,20 @@ from __future__ import annotations
 import asyncio
 import re
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from runtime.support import (
+    _AGENT_RE,
+    _STEP_RE,
+    _TASK_RE,
+    AgentModel,
+    MemoryBoard,
+    SupervisorModel,
+    World,
+    payload,
+)
 
 from agentplatform.contracts.board import BoardEntry, BoardEntryDraft
 from agentplatform.contracts.common import Actor
@@ -32,17 +43,6 @@ from agentplatform.testing import (
     multi_tool_response,
     text_response,
     tool_response,
-)
-from runtime.support import (
-    _AGENT_RE,
-    _STEP_RE,
-    _TASK_RE,
-    _TRIGGER_RE,
-    AgentModel,
-    MemoryBoard,
-    SupervisorModel,
-    World,
-    payload,
 )
 
 __all__ = [
@@ -136,7 +136,7 @@ class ScriptedAgentModel(AgentModel):
             step=step,
             system=system,
             user=user,
-            tools=frozenset(t.name for t in req.tools),
+            tools=frozenset(t.name for t in req.tools or []),
             tool_results=results,
         )
         self.calls.append(call)
@@ -245,7 +245,7 @@ class ScenarioWorld(World):
         self.board = ResolvingBoard(self.recorder, self._agents)
 
     async def approved_session(
-        self, edges: dict[str, list[str]], *, agent_count: int = 1, **kw: Any
+        self, edges: dict[str, Sequence[str]], *, agent_count: int = 1, **kw: Any
     ) -> str:
         """A session planned as ``edges`` (``make_tasks``) and approved; its id."""
         self.models.planner.plans = [make_tasks(edges)]
@@ -291,4 +291,4 @@ def shell(text: str) -> ModelResponse:
     return tool_response("run_command", cmd=f"echo {text}")
 
 
-__all__ += ["gate", "submit", "shell", "text_response"]
+__all__ += ["gate", "shell", "submit", "text_response"]

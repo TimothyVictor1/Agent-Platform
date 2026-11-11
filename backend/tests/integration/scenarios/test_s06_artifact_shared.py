@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from agentplatform.contracts.events import ArtifactPublished, TaskStarted
-
 from runtime.support import Behavior, payload
+
+from agentplatform.contracts.events import ArtifactPublished, TaskStarted
 from scenarios.harness import AgentCall, ScenarioWorld, multi_tool_response, shell
 
 REPORT = b"vendor,price\nAlder,4\n"
