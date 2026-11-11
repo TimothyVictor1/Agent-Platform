@@ -54,11 +54,15 @@ from agentplatform.contracts.events import (
     BoardEntryPosted,
     Event,
     EventEnvelope,
+    SessionPaused,
+    SessionResumed,
 )
 from agentplatform.contracts.model_io import ModelRequest, ModelResponse
 from agentplatform.contracts.sandbox import SandboxSpec
 from agentplatform.contracts.session import Session, Usage
 from agentplatform.db.event_store import EventStore
+from agentplatform.db.repositories import SessionRepository
+from agentplatform.db.session import as_session
 from agentplatform.eventing import EventRecorder
 from agentplatform.models.base import ModelClient
 from agentplatform.models.fallback_parser import parse_text_tool_calls
@@ -81,7 +85,7 @@ from agentplatform.runtime.hitl import HitlApprovalGate, HitlController
 from agentplatform.runtime.planner import Planner
 from agentplatform.runtime.policies import Policy, approval_rules_text, guard_registry
 from agentplatform.runtime.pool import AgentPool, PoolConfig, RuntimeDeps
-from agentplatform.runtime.readmodels import SessionDirectory
+from agentplatform.runtime.readmodels import SessionDirectory, project_read_models
 from agentplatform.runtime.scheduler import Scheduler, SchedulerConfig, SessionBudget
 from agentplatform.runtime.supervisor import (
     Supervisor,
@@ -586,6 +590,15 @@ class _Roster:
 # -- production container -----------------------------------------------------------------
 
 
+async def project_runtime_read_models(event: Event, tx: object) -> None:
+    """Keep plan review visible when an execution control changes underneath it."""
+    if isinstance(event.payload, SessionPaused | SessionResumed):
+        session = await SessionRepository(as_session(tx)).find(event.session_id)
+        if session is not None and session.status == "awaiting_approval":
+            return  # the scheduler still applies the pause/resume event to execution
+    await project_read_models(event, tx)
+
+
 async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None) -> Container:
     """Production wiring from ``settings`` (Postgres, Redis, configured providers)."""
     from redis.asyncio import Redis
@@ -603,7 +616,6 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     from agentplatform.runtime.readmodels import (
         PostgresSessionDirectory,
         ProjectingEventStore,
-        project_read_models,
     )
     from agentplatform.sandboxes.docker_local import DockerLocalProvider
     from agentplatform.sandboxes.e2b_provider import E2BProvider
@@ -616,7 +628,7 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     redis = Redis.from_url(settings.effective_redis_url, decode_responses=True)
     prefix = redis_prefix(settings.app_worktree)
     bus = RedisEventBus.from_url(settings.effective_redis_url, prefix=prefix)
-    store = ProjectingEventStore(PostgresEventStore(sm), project_read_models)
+    store = ProjectingEventStore(PostgresEventStore(sm), project_runtime_read_models)
     recorder = EventRecorder(store, bus)
     frames = await create_artifact_store(settings)
     board = PostgresBoardService(sm, recorder)

@@ -17,7 +17,12 @@ from agentplatform.db.event_store import PostgresEventStore
 from agentplatform.db.repositories import Repositories
 from agentplatform.db.session import SessionMaker, transaction
 from agentplatform.eventing import EventRecorder
-from agentplatform.runtime.container import Container, RedisCommandLog, RuntimeKnobs
+from agentplatform.runtime.container import (
+    Container,
+    RedisCommandLog,
+    RuntimeKnobs,
+    project_runtime_read_models,
+)
 from agentplatform.runtime.controls import (
     ControlRecord,
     RedisControlStore,
@@ -31,11 +36,10 @@ from agentplatform.runtime.policies import Policy
 from agentplatform.runtime.readmodels import (
     PostgresSessionDirectory,
     ProjectingEventStore,
-    project_read_models,
 )
 from agentplatform.testing import make_tasks
 
-from .support import FAST_KNOBS, World, until
+from .support import FAST_KNOBS, Behavior, World, until
 
 pytestmark = pytest.mark.infra
 
@@ -87,7 +91,7 @@ async def pg_world(
     sessionmaker: SessionMaker, redis: Redis, prefix: str
 ) -> AsyncIterator[tuple[World, Container]]:
     world = World()
-    store = ProjectingEventStore(PostgresEventStore(sessionmaker), project_read_models)
+    store = ProjectingEventStore(PostgresEventStore(sessionmaker), project_runtime_read_models)
     recorder = EventRecorder(store, world.bus)
     board = PostgresBoardService(sessionmaker, recorder, poll_interval_s=0.05)
     gate = HitlApprovalGate(events=recorder, store=PostgresApprovalStore(sessionmaker), board=board)
@@ -155,5 +159,62 @@ async def test_session_runs_end_to_end_over_postgres(
             assert s.plan_version == 1
         # this runtime keeps the session (lease) while it waits for follow-ups
         assert not await container.directory.claim(session.id, "rt-other", 30)
+    finally:
+        await rt.shutdown()
+
+
+async def test_pause_and_resume_preserve_pending_followup(
+    pg_world: tuple[World, Container], sessionmaker: SessionMaker
+) -> None:
+    world, container = pg_world
+    initial = make_tasks({"T1": []})
+    extension = make_tasks({"T2": ["T1"]})
+    world.models.planner.plans = [initial, extension]
+    world.models.agent.behaviors = {"T1": Behavior(steps=500, latency_s=0.02)}
+    rt = Runtime(container)
+    await rt.start()
+    try:
+        sid = (await world.create_session()).id
+
+        async def wait_for_event(event_type: str, command_id: str | None = None) -> None:
+            async def recorded() -> bool:
+                return any(
+                    event.type == event_type
+                    and (command_id is None or event.causation_id == command_id)
+                    for event in await container.store.read(sid)
+                )
+
+            await until(recorded)
+
+        async def assert_status(expected: str) -> None:
+            async with transaction(sessionmaker) as tx:
+                assert (await Repositories(tx).sessions.get(sid)).status == expected
+
+        plan = await world.send("command.plan_session", sid)
+        await wait_for_event("session.plan_proposed", plan.id)
+        await world.send("command.approve_plan", sid, plan_version=1)
+        await wait_for_event("task.started")
+        followup = await world.send("command.followup", sid, prompt="also do T2")
+        await wait_for_event("session.plan_proposed", followup.id)
+        await assert_status("awaiting_approval")
+
+        controls = rt.hosts[sid].rt.controls
+        pause = await world.send("command.pause", sid)
+        await wait_for_event("session.paused", pause.id)
+        await until(lambda: controls.session_paused)
+        await assert_status("awaiting_approval")
+
+        resume = await world.send("command.resume", sid)
+        await wait_for_event("session.resumed", resume.id)
+        await until(lambda: not controls.session_paused)
+        await assert_status("awaiting_approval")
+
+        edit = await world.send(
+            "command.update_plan", sid, tasks=initial + extension, base_version=2
+        )
+        await wait_for_event("session.plan_updated", edit.id)
+        approve = await world.send("command.approve_plan", sid, plan_version=3)
+        await wait_for_event("session.approved", approve.id)
+        await assert_status("running")
     finally:
         await rt.shutdown()

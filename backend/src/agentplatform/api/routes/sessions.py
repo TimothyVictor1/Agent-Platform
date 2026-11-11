@@ -22,11 +22,11 @@ from agentplatform.api.deps import Deps, Tx
 from agentplatform.api.errors import ServiceUnavailableError
 from agentplatform.api.problems import plan_validation_error
 from agentplatform.api.routes._common import (
-    ACTIVE,
     EDITABLE_PLAN,
     TERMINAL,
     current_plan_version,
     load_session,
+    require_session_control,
     require_status,
 )
 from agentplatform.contracts.api import (
@@ -285,7 +285,7 @@ async def followup(session_id: str, body: FollowupRequest, tx: Tx, deps: Deps) -
 )
 async def steer(session_id: str, body: SteerRequest, tx: Tx, deps: Deps) -> CommandAccepted:
     session = await load_session(tx, session_id)
-    require_status(session, ACTIVE, "steer")
+    require_session_control(session, "steer")
     if body.agent_id is not None:
         agent = await AgentRepository(tx).find(body.agent_id)
         if agent is None or agent.session_id != session_id:
@@ -302,7 +302,7 @@ async def steer(session_id: str, body: SteerRequest, tx: Tx, deps: Deps) -> Comm
 )
 async def stop(session_id: str, tx: Tx, deps: Deps) -> CommandAccepted:
     session = await load_session(tx, session_id)
-    if session.status in TERMINAL:
+    if session.status in TERMINAL or session.ended_at is not None:
         raise ConflictError(f"the session is already {session.status}")
     return await deps.commands.issue("command.stop", session_id)
 
@@ -314,7 +314,7 @@ async def stop(session_id: str, tx: Tx, deps: Deps) -> CommandAccepted:
 )
 async def pause(session_id: str, tx: Tx, deps: Deps) -> CommandAccepted:
     session = await load_session(tx, session_id)
-    require_status(session, {"running"}, "pause")
+    require_session_control(session, "pause")
     return await deps.commands.issue("command.pause", session_id)
 
 
@@ -325,7 +325,7 @@ async def pause(session_id: str, tx: Tx, deps: Deps) -> CommandAccepted:
 )
 async def resume(session_id: str, tx: Tx, deps: Deps) -> CommandAccepted:
     session = await load_session(tx, session_id)
-    require_status(session, {"paused"}, "resume")
+    require_session_control(session, "resume")
     return await deps.commands.issue("command.resume", session_id)
 
 

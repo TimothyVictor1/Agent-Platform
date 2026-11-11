@@ -100,6 +100,8 @@ class PlanLog:
     latest_version: int = 0
     latest: PlanProposal | None = None
     approved_version: int = 0
+    started: bool = False
+    ended: bool = False
     planned: bool = False
     causations: set[str] = field(default_factory=set)
     task_status: dict[str, TaskStatus] = field(default_factory=dict)
@@ -112,6 +114,8 @@ class PlanLog:
         p = event.payload
         if isinstance(p, SessionCreated):
             self.status = p.session.status
+            self.started = p.session.started_at is not None
+            self.ended = p.session.ended_at is not None
         elif isinstance(p, SessionPlanProposed | SessionPlanUpdated):
             if p.plan_version >= self.latest_version:
                 self.latest_version, self.latest = p.plan_version, p.proposal
@@ -120,17 +124,20 @@ class PlanLog:
                 self.status = "awaiting_approval"
         elif isinstance(p, SessionApproved):
             self.approved_version = max(self.approved_version, p.plan_version)
+            self.started, self.ended = True, False
             self.status = "running"
-        elif isinstance(p, SessionPaused):
-            self.status = "paused"
-        elif isinstance(p, SessionResumed):
-            self.status = "running"
+        elif isinstance(p, SessionPaused | SessionResumed):
+            if self.status != "awaiting_approval":
+                self.status = "paused" if isinstance(p, SessionPaused) else "running"
         elif isinstance(p, SessionCompleted):
             self.status = "completed"
+            self.ended = True
         elif isinstance(p, SessionFailed):
             self.status = "failed"
+            self.ended = True
         elif isinstance(p, SessionStopped):
             self.status = "stopped"
+            self.ended = True
         elif isinstance(p, TaskCreated | TaskUpdated):
             self.task_status[p.task.key] = p.task.status
         elif isinstance(p, TaskAccepted):
@@ -227,12 +234,12 @@ class CommandRouter:
         elif isinstance(command, FollowupCommand):
             await self._followup(command, plan_log)
         elif isinstance(command, PauseSessionCommand):
-            if plan_log.status != "running":
+            if not plan_log.started or plan_log.ended:
                 raise ConflictError(f"cannot pause a {plan_log.status} session")
             await self._emit(SessionPaused(reason="paused by the user"), command.id, command)
             self.rt.controls.pause_session()
         elif isinstance(command, ResumeSessionCommand):
-            if plan_log.status != "paused":
+            if not plan_log.started or plan_log.ended:
                 raise ConflictError(f"cannot resume a {plan_log.status} session")
             self.rt.controls.resume_session()
             await self._emit(SessionResumed(), command.id, command)

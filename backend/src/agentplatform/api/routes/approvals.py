@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from agentplatform.api.deps import Deps, Tx
-from agentplatform.api.routes._common import load_session
+from agentplatform.api.routes._common import load_session, require_session_control
 from agentplatform.contracts.api import ApprovalDecisionRequest, ApprovalList, CommandAccepted
 from agentplatform.contracts.common import ApprovalStatus
 from agentplatform.db.repositories import ApprovalRepository
@@ -40,6 +40,8 @@ async def decide(
     approval = await ApprovalRepository(tx).get(approval_id)
     if approval.status != "pending":
         raise ConflictError(f"approval {approval_id} is already {approval.status}")
+    session = await load_session(tx, approval.session_id)
+    require_session_control(session, "decide an approval")
     return await deps.commands.issue(
         "command.decide_approval",
         approval.session_id,

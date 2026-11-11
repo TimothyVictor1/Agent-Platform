@@ -12,16 +12,15 @@ from agentplatform.db.repositories import PlanRepository, SessionRepository
 from agentplatform.errors import ConflictError
 
 __all__ = [
-    "ACTIVE",
     "EDITABLE_PLAN",
     "TERMINAL",
     "current_plan_version",
     "load_session",
+    "require_session_control",
     "require_status",
 ]
 
 TERMINAL: frozenset[SessionStatus] = frozenset({"completed", "failed", "stopped"})
-ACTIVE: frozenset[SessionStatus] = frozenset({"running", "paused"})
 EDITABLE_PLAN: frozenset[SessionStatus] = frozenset({"planning", "awaiting_approval"})
 
 
@@ -33,6 +32,12 @@ async def load_session(tx: AsyncSession, session_id: str) -> Session:
 def require_status(session: Session, allowed: Collection[SessionStatus], action: str) -> None:
     """``ConflictError`` (409) unless the session is in one of ``allowed``."""
     if session.status not in allowed:
+        raise ConflictError(f"cannot {action} while the session is {session.status}")
+
+
+def require_session_control(session: Session, action: str) -> None:
+    """Controls operate on an existing execution, even while a plan is in review."""
+    if session.started_at is None or session.ended_at is not None or session.status in TERMINAL:
         raise ConflictError(f"cannot {action} while the session is {session.status}")
 
 

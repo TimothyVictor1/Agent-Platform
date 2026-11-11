@@ -70,6 +70,8 @@ class Api:
         status: SessionStatus = "planning",
         *,
         plan: bool = False,
+        started: bool = False,
+        ended: bool = False,
     ) -> Session:
         session = await create_db_session(self.store)
         async with transaction(self.sm) as tx:
@@ -81,7 +83,12 @@ class Api:
                     )
                 )
                 await repos.sessions.set_plan_version(session.id, 1)
-            session = await repos.sessions.set_status(session.id, status)
+            session = await repos.sessions.set_status(
+                session.id,
+                status,
+                started_at=utcnow() if started or status in {"running", "paused"} else None,
+                ended_at=utcnow() if ended else None,
+            )
         return session
 
     async def agent(
@@ -349,14 +356,16 @@ async def test_stop_pause_resume_state_rules(api: Api) -> None:
     q = session_command_queue(running.id)
     pause = await api.client.post(f"/api/v1/sessions/{running.id}/pause")
     assert api.last_command(pause, q).type == "command.pause"
-    problem(await api.client.post(f"/api/v1/sessions/{running.id}/resume"), 409)
+    resume_running = await api.client.post(f"/api/v1/sessions/{running.id}/resume")
+    assert api.last_command(resume_running, q).type == "command.resume"
     stop = await api.client.post(f"/api/v1/sessions/{running.id}/stop")
     assert api.last_command(stop, q).type == "command.stop"
 
     paused = await api.session("paused")
     resume = await api.client.post(f"/api/v1/sessions/{paused.id}/resume")
     assert api.last_command(resume, session_command_queue(paused.id)).type == "command.resume"
-    problem(await api.client.post(f"/api/v1/sessions/{paused.id}/pause"), 409)
+    pause_paused = await api.client.post(f"/api/v1/sessions/{paused.id}/pause")
+    assert api.last_command(pause_paused, session_command_queue(paused.id)).type == "command.pause"
 
     stopped = await api.session("stopped")
     problem(await api.client.post(f"/api/v1/sessions/{stopped.id}/stop"), 409)
@@ -375,6 +384,46 @@ async def test_takeover_and_release(api: Api) -> None:
     r = await api.client.post(f"/api/v1/agents/{taken.id}/release")
     assert api.last_command(r, q).type == "command.release"
     problem(await api.client.post("/api/v1/agents/missing/takeover"), 404)
+
+
+@pytest.mark.parametrize(
+    ("started", "ended"),
+    [(False, False), (True, False), (True, True)],
+    ids=["initial-plan", "active-followup", "finished-followup"],
+)
+async def test_controls_while_awaiting_plan_approval(api: Api, started: bool, ended: bool) -> None:
+    session = await api.session("awaiting_approval", plan=True, started=started, ended=ended)
+    working = await api.agent(session, 0, "working")
+    taken = await api.agent(session, 1, "paused_by_user")
+    approval = Approval(
+        id=new_id(),
+        session_id=session.id,
+        agent_id=working.id,
+        action_summary="Submit the form",
+        risk="high",
+        created_at=utcnow(),
+    )
+    async with transaction(api.sm) as tx:
+        await Repositories(tx).approvals.insert(approval)
+
+    base = f"/api/v1/sessions/{session.id}"
+    requests = [
+        ("steer", f"{base}/steer", {"agent_id": working.id, "text": "keep going"}),
+        ("pause", f"{base}/pause", None),
+        ("resume", f"{base}/resume", None),
+        ("takeover", f"/api/v1/agents/{working.id}/takeover", None),
+        ("release", f"/api/v1/agents/{taken.id}/release", None),
+        ("decide_approval", f"/api/v1/approvals/{approval.id}/decide", {"decision": "approve"}),
+        ("stop", f"{base}/stop", None),
+    ]
+    for command, url, body in requests:
+        response = await api.client.post(url, json=body)
+        if not ended and (started or command == "stop"):
+            assert api.last_command(response, session_command_queue(session.id)).type == (
+                f"command.{command}"
+            )
+        else:
+            problem(response, 409)
 
 
 # --- board / approvals --------------------------------------------------------------------
