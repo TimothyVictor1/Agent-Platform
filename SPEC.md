@@ -889,6 +889,15 @@ APP_ADOPT_COMPLETED_HOURS=24
 APP_PLANNING_SWEEP_S=60
 # Minutes between orphaned-sandbox cleanups (also run at startup).
 APP_ORPHAN_SWEEP_MIN=10
+# docker_local sandbox egress: open (default) or proxy. With proxy, sandboxes have no
+# route to the host or the internet; only the compose egress-proxy is reachable, and it
+# refuses destinations that resolve to non-public addresses (docs/security.md).
+# Start the proxy first: docker compose --profile egress up -d egress-proxy
+APP_SANDBOX_EGRESS=open
+# Container name of the egress proxy (compose default shown).
+APP_EGRESS_PROXY_CONTAINER=agentplatform-egress-proxy-1
+# Exact host names the proxy lets resolve to private addresses (the eval fixture site).
+APP_EGRESS_ALLOW_PRIVATE_HOSTS=eval-fixtures
 ```
 Ports are configurable so several Superset worktrees can run side by side (API `APP_API_PORT`, frontend `PORT`, compose Postgres `APP_PG_PORT`, default 5432, and compose Redis `APP_REDIS_PORT`, default 6379).
 
