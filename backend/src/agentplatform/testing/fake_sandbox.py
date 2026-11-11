@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import posixpath
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -272,6 +272,8 @@ class FakeSandboxProvider:
         self._name: SandboxProviderName = name
         self.sandboxes: dict[str, FakeSandbox] = {}
         self.specs: list[SandboxSpec] = []
+        self.spec_of: dict[str, SandboxSpec] = {}
+        """The spec each sandbox was created from (by sandbox id)."""
         self.fail_creates = 0
 
     @property
@@ -288,7 +290,23 @@ class FakeSandboxProvider:
         else:
             sandbox = FakeSandbox(screen_size=spec.screen, env=spec.env, provider=self._name)
         self.sandboxes[sandbox.id] = sandbox
+        self.spec_of[sandbox.id] = spec
         return sandbox
+
+    async def remove_agent_sandboxes(
+        self, session_id: str, agent_id: str, *, keep: Collection[str] = ()
+    ) -> list[str]:
+        """``AgentSandboxSweeper``: kill the agent's live sandboxes not in ``keep``."""
+        removed: list[str] = []
+        for sid, sandbox in self.sandboxes.items():
+            spec = self.spec_of.get(sid)
+            if spec is None or (spec.session_id, spec.agent_id) != (session_id, agent_id):
+                continue
+            if sid in keep or sandbox.killed:
+                continue
+            await sandbox.kill()
+            removed.append(sid)
+        return removed
 
     async def connect(self, sandbox_id: str) -> FakeSandbox:
         sandbox = self.sandboxes.get(sandbox_id)

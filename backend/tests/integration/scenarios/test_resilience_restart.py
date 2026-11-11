@@ -17,6 +17,7 @@ from collections import Counter
 from collections.abc import AsyncIterator
 
 import pytest
+from runtime.support import Behavior, PlannerModel, payload, until
 
 from agentplatform.contracts.events import (
     ApprovalDecided,
@@ -27,7 +28,6 @@ from agentplatform.contracts.events import (
 from agentplatform.contracts.model_io import ModelRequest, ModelResponse
 from agentplatform.contracts.sandbox import SandboxSpec
 from agentplatform.testing import FakeSandbox, FakeSandboxProvider, make_tasks
-from runtime.support import Behavior, PlannerModel, payload, until
 from scenarios.harness import ScenarioWorld, ScriptedSupervisor, tool_response
 
 
@@ -204,15 +204,15 @@ async def test_crash_while_awaiting_approval(world: ScenarioWorld) -> None:
     second = payload(again, ApprovalRequested).approval
     await world.send("command.decide_approval", sid, approval_id=second.id, decision="approve")
     await world.wait_event(sid, "session.completed", limit_s=20)
-    decided = [payload(e, ApprovalDecided).approval for e in world.events(sid, "approval.decided")]
-    assert [(a.id, a.status) for a in decided] == [
+    decisions = [
+        payload(e, ApprovalDecided).approval for e in world.events(sid, "approval.decided")
+    ]
+    assert [(a.id, a.status) for a in decisions] == [
         (approval.id, "expired"),
         (second.id, "approved"),
     ]
     assert_clean_finish(world, sid, {"T1"})
-    assert any(
-        c.tool_results == ("Approved: Pay the invoice",) for c in m.of("T1")
-    )
+    assert any(c.tool_results == ("Approved: Pay the invoice",) for c in m.of("T1"))
 
 
 async def test_crash_during_review(world: ScenarioWorld) -> None:

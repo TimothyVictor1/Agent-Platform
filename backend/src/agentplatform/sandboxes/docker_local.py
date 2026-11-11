@@ -574,18 +574,8 @@ class DockerLocalProvider:
             expired = expires is not None and expires <= now
             if not (orphan or expired) or container.id is None:
                 continue
-            try:
-                await asyncio.to_thread(container.remove, force=True)
-            except docker.errors.NotFound:
-                pass
-            except docker.errors.DockerException as exc:
-                log.warning(
-                    "sandbox_orphan_remove_failed",
-                    sandbox_id=container.id[:12],
-                    error=str(exc)[:200],
-                )
+            if not await self._force_remove(container, "sandbox_orphan_remove_failed"):
                 continue
-            await self._tokens.delete(container.id)
             removed.append(container.id)
             log.info(
                 "sandbox_orphan_removed",
@@ -594,6 +584,60 @@ class DockerLocalProvider:
                 expired=expired,
             )
         return removed
+
+    async def remove_agent_sandboxes(
+        self, session_id: str, agent_id: str, *, keep: Collection[str] = ()
+    ) -> list[str]:
+        """Remove this worktree's containers labelled with ``session_id`` and
+        ``agent_id`` except ``keep`` (``AgentSandboxSweeper``): the leftovers of a
+        runtime that died while ``create`` was running. Returns the removed ids."""
+        if not session_id or not agent_id:
+            return []
+        client = await self._client()
+        wanted = {
+            LABEL_PROVIDER: PROVIDER_NAME,
+            LABEL_WORKTREE: self._worktree,
+            LABEL_SESSION: session_id,
+            LABEL_AGENT: agent_id,
+        }
+        containers = await self._call(
+            "list sandboxes",
+            client.containers.list,
+            all=True,
+            filters={"label": [f"{k}={v}" for k, v in wanted.items()]},
+        )
+        kept = set(keep)
+        removed: list[str] = []
+        for container in containers:
+            cid = container.id
+            # Defence in depth: the daemon filtered already, re-check before deleting.
+            if cid is None or any(container.labels.get(k) != v for k, v in wanted.items()):
+                continue
+            if cid in kept or any(cid.startswith(k) for k in kept if len(k) >= 12):
+                continue
+            if not await self._force_remove(container, "sandbox_leftover_remove_failed"):
+                continue
+            removed.append(cid)
+            log.info(
+                "sandbox_leftover_removed",
+                sandbox_id=cid[:12],
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+        return removed
+
+    async def _force_remove(self, container: Any, failure_event: str) -> bool:
+        """``docker rm -f`` and drop the token; ``False`` (logged) if removal failed.
+        A container that is already gone counts as removed."""
+        try:
+            await asyncio.to_thread(container.remove, force=True)
+        except docker.errors.NotFound:
+            pass
+        except docker.errors.DockerException as exc:
+            log.warning(failure_event, sandbox_id=str(container.id)[:12], error=str(exc)[:200])
+            return False
+        await self._tokens.delete(container.id)
+        return True
 
     def _http_client(self, endpoints: _Endpoints, token: str) -> httpx.AsyncClient:
         return httpx.AsyncClient(

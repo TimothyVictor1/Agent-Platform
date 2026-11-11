@@ -11,12 +11,14 @@ layer's job (``runtime/agent/actions.py``), not the provider's.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Literal, Protocol, runtime_checkable
 
 from agentplatform.contracts.common import HealthStatus, SandboxProviderName
 from agentplatform.contracts.sandbox import CommandResult, FileInfo, SandboxSpec, StreamUrls
 
 __all__ = [
+    "AgentSandboxSweeper",
     "MouseButton",
     "SandboxHandle",
     "SandboxProvider",
@@ -167,4 +169,22 @@ class SandboxProvider(Protocol):
     async def health(self) -> HealthStatus:
         """Is the provider usable (Docker daemon reachable / API key valid)? Must not
         raise."""
+        ...
+
+
+@runtime_checkable
+class AgentSandboxSweeper(Protocol):
+    """Optional provider capability: find and remove one agent's sandboxes.
+
+    A runtime that dies while ``create`` runs leaves a sandbox that no event names.
+    Before an adopted agent gets a new sandbox, the pool removes the agent's other
+    sandboxes with this, so a crash during boot does not leak a running desktop
+    until its lifetime ends (T21)."""
+
+    async def remove_agent_sandboxes(
+        self, session_id: str, agent_id: str, *, keep: Collection[str] = ()
+    ) -> list[str]:
+        """Remove every sandbox labelled with ``session_id`` and ``agent_id`` whose id
+        is not in ``keep``; return the removed ids. Never touches other sessions,
+        agents or worktrees. Raises ``SandboxError`` if the provider cannot list."""
         ...

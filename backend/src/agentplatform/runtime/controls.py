@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
@@ -44,7 +44,7 @@ from agentplatform.contracts.sandbox import SandboxSpec
 from agentplatform.errors import ConflictError, NotFoundError
 from agentplatform.runtime.agent.loop import ControlMode, LocalControlState
 from agentplatform.runtime.policies import check_secret_hygiene
-from agentplatform.sandboxes.base import SandboxHandle, SandboxProvider
+from agentplatform.sandboxes.base import AgentSandboxSweeper, SandboxHandle, SandboxProvider
 
 __all__ = [
     "HOLDS",
@@ -461,3 +461,11 @@ class GuardedProvider:
 
     async def health(self) -> HealthStatus:
         return await self.inner.health()
+
+    async def remove_agent_sandboxes(
+        self, session_id: str, agent_id: str, *, keep: Collection[str] = ()
+    ) -> list[str]:
+        """``AgentSandboxSweeper`` of the inner provider; ``[]`` if it has none."""
+        if not isinstance(self.inner, AgentSandboxSweeper):
+            return []
+        return await self.inner.remove_agent_sandboxes(session_id, agent_id, keep=keep)

@@ -20,8 +20,9 @@ from agentplatform.config import Settings
 from agentplatform.contracts.common import utcnow
 from agentplatform.contracts.sandbox import SandboxSpec
 from agentplatform.errors import NotSupportedError, SandboxError, SandboxExpiredError
-from agentplatform.sandboxes.base import SandboxHandle, SandboxProvider
+from agentplatform.sandboxes.base import AgentSandboxSweeper, SandboxHandle, SandboxProvider
 from agentplatform.sandboxes.docker_local import (
+    LABEL_AGENT,
     LABEL_EXPIRES_AT,
     LABEL_PROVIDER,
     LABEL_SESSION,
@@ -925,6 +926,40 @@ async def test_cleanup_orphans_only_touches_this_worktree(
     assert not stranger.removed
     labels = fake_docker.containers.list_filters[-1]["label"]
     assert f"{LABEL_WORKTREE}={WORKTREE}" in labels
+
+
+async def test_remove_agent_sandboxes_only_touches_that_agent(
+    provider: DockerLocalProvider, fake_docker: FakeDockerClient, store: InMemoryControlTokenStore
+) -> None:
+    """T21: the leftovers of a runtime that died during ``create`` are removed before
+    the agent gets a new sandbox; nothing of other agents/sessions/worktrees."""
+    leftover = await _create(provider, session_id="s1", agent_id="a1")
+    kept = await _create(provider, session_id="s1", agent_id="a1")
+    other_agent = await _create(provider, session_id="s1", agent_id="a2")
+    other_session = await _create(provider, session_id="s2", agent_id="a1")
+    stranger = FakeContainer(
+        fake_docker,
+        {
+            "labels": {
+                LABEL_PROVIDER: "docker_local",
+                LABEL_WORKTREE: "other_wt",
+                LABEL_SESSION: "s1",
+                LABEL_AGENT: "a1",
+            }
+        },
+    )
+    fake_docker.containers.extra_listed.append(stranger)  # a daemon that ignored the filter
+
+    removed = await provider.remove_agent_sandboxes("s1", "a1", keep=[kept.id])
+    assert removed == [leftover.id]
+    assert leftover.id not in store
+    assert all(h.id in store for h in (kept, other_agent, other_session))
+    assert isinstance(provider, AgentSandboxSweeper)
+    assert not stranger.removed
+    labels = fake_docker.containers.list_filters[-1]["label"]
+    assert f"{LABEL_AGENT}=a1" in labels
+    assert f"{LABEL_WORKTREE}={WORKTREE}" in labels
+    assert await provider.remove_agent_sandboxes("", "a1") == []
 
 
 async def test_health(provider: DockerLocalProvider, fake_docker: FakeDockerClient) -> None:

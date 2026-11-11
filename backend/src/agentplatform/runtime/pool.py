@@ -70,7 +70,7 @@ from agentplatform.runtime.agent.loop import (
     LocalControlState,
     TaskOutcome,
 )
-from agentplatform.sandboxes.base import SandboxHandle, SandboxProvider
+from agentplatform.sandboxes.base import AgentSandboxSweeper, SandboxHandle, SandboxProvider
 
 __all__ = [
     "AgentPool",
@@ -668,7 +668,24 @@ class AgentPool:
                 if m.sandbox is not None:
                     with suppress(Exception):
                         await m.sandbox.kill()
+        await self._sweep_leftovers(m)
         return await self._create_sandbox(m), True
+
+    async def _sweep_leftovers(self, m: _Member) -> None:
+        """Before a new sandbox: remove the agent's sandboxes that no event names (a
+        runtime died during ``create``). Best effort; the periodic orphan cleanup and
+        the sandbox lifetime remain the backstop."""
+        if not isinstance(self._provider, AgentSandboxSweeper):
+            return
+        try:
+            removed = await self._provider.remove_agent_sandboxes(self.session.id, m.agent.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            m.log.warning("sandbox_leftover_sweep_failed", error=type(exc).__name__)
+            return
+        if removed:
+            m.log.info("sandbox_leftovers_removed", count=len(removed))
 
 
 class AgentWorker:
