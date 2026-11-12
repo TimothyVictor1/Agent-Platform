@@ -65,8 +65,12 @@ The optional compose MinIO is started with `docker compose --profile s3 up -d mi
 
 Keys live **only here** — `models.yaml` never contains them; it names the variable via
 `api_key_env`, and the client factory raises a `ConfigError` if that variable is
-missing or empty while the profile uses it. Nothing secret is ever sent into a
-sandbox.
+missing or empty while the profile uses it. Any variable a profile names in
+`api_key_env` may be set in `.env` or in the process environment (the environment
+wins), including providers without a row below; every such key also joins the
+secret leak checks. If the runtime cannot build a new session's models (e.g. the
+key is unset), the session fails at once with `session.failed` and a redacted
+reason. Nothing secret is ever sent into a sandbox.
 
 | Variable | What it is for |
 |---|---|

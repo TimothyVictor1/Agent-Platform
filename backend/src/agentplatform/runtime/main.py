@@ -38,7 +38,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from datetime import datetime, timedelta
 
@@ -47,10 +47,12 @@ import structlog
 from agentplatform.bus.base import NEW_SESSIONS_QUEUE, session_command_queue
 from agentplatform.config import find_repo_root, load_settings
 from agentplatform.contracts.commands import CommandBase, PlanSessionCommand
-from agentplatform.contracts.common import utcnow
+from agentplatform.contracts.common import Actor, utcnow
+from agentplatform.contracts.events import EventDraft, SessionFailed
 from agentplatform.contracts.session import Session
 from agentplatform.errors import ConfigError
 from agentplatform.logs import configure_logging
+from agentplatform.models.errors import redact_secrets
 from agentplatform.runtime.commands import CommandRouter, read_plan_log
 from agentplatform.runtime.container import (
     Container,
@@ -71,6 +73,16 @@ _COMMAND_DRAIN_S = 10.0
 _UNKNOWN_SESSION_ATTEMPTS = 20
 """Deliveries of a plan command for a session this runtime's database does not know
 before it is dropped (about 10 minutes with the 30 s visibility timeout)."""
+
+
+def safe_error_reason(exc: Exception, secrets: Sequence[str], *, limit: int = 500) -> str:
+    """``exc`` as a message safe for events and logs: every configured secret value and
+    anything that looks like a key replaced by ``[redacted]``, length capped."""
+    text = f"{type(exc).__name__}: {exc}"
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return redact_secrets(text)[:limit]
 
 
 class SessionHost:
@@ -351,9 +363,19 @@ class Runtime:
                 self._log.warning("unexpected_new_session_item")
                 await c.bus.ack(delivery)
                 continue
+            session: Session | None = None
             try:
                 session = await c.directory.get(item.session_id)
                 host = None if session is None else await self.host(session, adopted=False)
+            except ConfigError as exc:
+                # Permanent (e.g. a model key that is not set): a retry cannot help, so
+                # fail the session now instead of leaving it in ``planning``.
+                if session is not None and await self._fail_unhostable(session, exc):
+                    await c.bus.ack(delivery)
+                else:
+                    self._log.error("new_session_failed", error=type(exc).__name__)
+                    await asyncio.sleep(_COMMAND_RETRY_S)
+                continue
             except Exception as exc:
                 self._log.error("new_session_failed", error=type(exc).__name__)
                 await asyncio.sleep(_COMMAND_RETRY_S)
@@ -370,6 +392,25 @@ class Runtime:
             else:
                 host.plan_requests.put_nowait(item.id)
             await c.bus.ack(delivery)
+
+    async def _fail_unhostable(self, session: Session, exc: ConfigError) -> bool:
+        """Record ``session.failed`` for a session this runtime cannot host and release
+        its lease. ``False`` if that did not work (the command is then retried)."""
+        c = self.container
+        reason = safe_error_reason(exc, c.secrets)
+        self._log.error(
+            "new_session_failed", session_id=session.id, error=type(exc).__name__, reason=reason
+        )
+        try:
+            await c.recorder.record(
+                session.id,
+                EventDraft(payload=SessionFailed(reason=reason), actor=Actor.system()),
+            )
+            await c.directory.release(session.id, self.owner)
+        except Exception as record_exc:
+            self._log.error("session_fail_record_failed", error=type(record_exc).__name__)
+            return False
+        return True
 
     async def _sweeps(self) -> None:
         c = self.container

@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 import pytest
+from structlog.testing import capture_logs
 
 from agentplatform.contracts.artifact import Artifact
 from agentplatform.contracts.common import Actor, new_id, utcnow
@@ -17,6 +18,7 @@ from agentplatform.contracts.events import (
     SessionApproved,
     SessionBudgetExceeded,
     SessionBudgetWarning,
+    SessionFailed,
     SessionPlanProposed,
     SessionPlanUpdated,
     SessionStopped,
@@ -25,6 +27,7 @@ from agentplatform.contracts.events import (
     UserSteer,
 )
 from agentplatform.contracts.session import Budgets
+from agentplatform.errors import ConfigError
 from agentplatform.testing import make_tasks
 
 from .support import Behavior, World, payload, until
@@ -269,3 +272,36 @@ async def test_supervisor_usage_counts_toward_the_session_budget(world: World) -
     assert payload(exceeded, SessionBudgetExceeded).metric == "cost_usd"
     stopped = await world.wait_event(sid, "session.stopped")
     assert payload(stopped, SessionStopped).reason == "budget"
+
+
+async def test_unhostable_new_session_fails_fast_with_a_safe_reason(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permanent config error while hosting a new session (e.g. a model key that is
+    not set) fails the session at once, with a reason free of secrets, instead of
+    leaving it in ``planning`` while the command is redelivered forever."""
+    secret = "tp-secret-123456789"  # gitleaks:allow
+
+    def broken(profile: str, role: str) -> Any:
+        raise ConfigError(f"environment variable TEST_PROVIDER_KEY is not set ({secret})")
+
+    monkeypatch.setattr(world.models, "client", broken)
+    rt = await world.runtime()
+    rt.container.secrets.append(secret)
+    session = await world.create_session()
+    with capture_logs() as logs:
+        await world.send("command.plan_session", session.id)
+        failed = await world.wait_event(session.id, "session.failed", limit_s=5.0)
+    reason = payload(failed, SessionFailed).reason
+    assert "TEST_PROVIDER_KEY is not set" in reason
+    assert secret not in reason
+    known = world.directory.known[session.id]
+    assert known.session.status == "failed"
+    assert known.owner is None  # lease released
+    logged = [e for e in logs if e["event"] == "new_session_failed"]
+    assert logged
+    assert logged[0]["reason"] == reason
+    assert all(secret not in str(e) for e in logs)
+    await asyncio.sleep(0.3)  # acked: not redelivered, failed once, never planned
+    assert len(world.events(session.id, "session.failed")) == 1
+    assert not world.events(session.id, "session.planning_started")
