@@ -7,7 +7,6 @@ app lifespan); tests pass a container made from in-memory fakes. No module globa
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Annotated
 
@@ -97,7 +96,7 @@ class ApiDeps:
             models,
             self.sandbox_providers,
             model_client_factory,
-            secrets=settings.secret_values,
+            secrets=lambda: settings.secret_values(models),
         )
         self.session_exists = session_exists or self._db_session_exists
         self.readiness: dict[str, Check] = (
@@ -179,9 +178,10 @@ async def build_deps(settings: Settings) -> ApiDeps:
     if settings.e2b_api_key is not None and settings.e2b_api_key.get_secret_value():
         providers["e2b"] = E2BProvider.from_settings(settings)
     shared = SharedModelState()
+    model_keys = settings.model_env(models)  # api_key_env names set only in .env too
 
     def factory(role: RoleConfig) -> ModelClient:
-        return build_client(role, models.prices, shared=shared, env=os.environ)
+        return build_client(role, models.prices, shared=shared, env=model_keys)
 
     return ApiDeps(
         settings=settings,

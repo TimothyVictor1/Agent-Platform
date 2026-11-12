@@ -13,14 +13,24 @@ create them once in ``main.py`` and inject them (no global singletons).
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+from dotenv import dotenv_values
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SecretStr,
+    ValidationError,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import ENV_FILE_SENTINEL, DotenvType
 
 from agentplatform.contracts.common import CoordinateMode
 from agentplatform.errors import ConfigError
@@ -39,6 +49,8 @@ __all__ = [
     "load_models_config",
     "load_policies_config",
     "load_settings",
+    "model_key_values",
+    "read_env_files",
 ]
 
 DEFAULT_DATABASE_URL = (
@@ -72,6 +84,13 @@ class Settings(BaseSettings):
         case_sensitive=False,
         str_strip_whitespace=True,
     )
+
+    _env_files: tuple[Path, ...] = PrivateAttr(default=())
+
+    def __init__(self, _env_file: DotenvType | None = ENV_FILE_SENTINEL, **values: Any) -> None:
+        super().__init__(_env_file=_env_file, **values)
+        chosen = self.model_config.get("env_file") if _env_file is ENV_FILE_SENTINEL else _env_file
+        self._env_files = _env_paths(chosen)
 
     database_url: str = ""
     redis_url: str = ""
@@ -151,8 +170,30 @@ class Settings(BaseSettings):
         path = Path(value)
         return path if path.is_absolute() else self.repo_root / path
 
-    def secret_values(self) -> list[str]:
-        """All configured secret values (non-empty), for leak checks. Never log these."""
+    def model_key_env(
+        self, models: ModelsConfig, environ: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
+        """Name -> value of every variable a profile names in ``api_key_env``: from the
+        process environment (``environ``), else from the ``.env`` files this ``Settings``
+        read (pydantic-settings' precedence). pydantic does not export ``.env`` values to
+        ``os.environ``, so a provider key Settings has no field for is only found here.
+        Unset names are left out. Values are secrets: never log them."""
+        return _model_key_env(models, environ, self._env_files)
+
+    def model_env(
+        self, models: ModelsConfig, environ: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
+        """``environ`` (default ``os.environ``) plus every ``api_key_env`` variable it
+        lacks, read from ``.env``: the mapping model clients resolve their keys from."""
+        env = dict(os.environ if environ is None else environ)
+        for name, value in self.model_key_env(models, env).items():
+            env.setdefault(name, value)
+        return env
+
+    def secret_values(self, models: ModelsConfig | None = None) -> list[str]:
+        """All configured secret values (non-empty), for leak checks; with ``models``,
+        also every key a profile names in ``api_key_env`` (environment or ``.env``).
+        Never log these."""
         secrets = [
             self.app_api_token,
             self.s3_access_key_id,
@@ -171,21 +212,68 @@ class Settings(BaseSettings):
             password = urlsplit(url).password if url else None
             if password:
                 values.append(unquote(password))
+        if models is not None:
+            values.extend(self.model_key_env(models).values())
         return list(dict.fromkeys(values))
 
 
 def model_key_values(models: ModelsConfig, env: Mapping[str, str] | None = None) -> list[str]:
     """Values of every variable a model profile names in ``api_key_env`` (e.g. a
     provider key that ``Settings`` has no field for), for the same leak checks as
-    ``Settings.secret_values``. Never log these."""
-    source = os.environ if env is None else env
+    ``Settings.secret_values``. With ``env`` only that mapping is read; by default the
+    process environment, else the ``.env`` files ``Settings`` reads. Never log these."""
+    if env is not None:
+        return [v for v in (env.get(n, "").strip() for n in _api_key_env_names(models)) if v]
+    files = _env_paths(Settings.model_config.get("env_file"))
+    return list(_model_key_env(models, None, files).values())
+
+
+def read_env_files(files: Sequence[Path]) -> dict[str, str]:
+    """Variables of the ``.env`` files that exist among ``files`` (a later file wins,
+    as in pydantic-settings), stripped; empty values are left out. Never log these."""
+    out: dict[str, str] = {}
+    for path in files:
+        if not path.is_file():
+            continue
+        for name, value in dotenv_values(path, encoding="utf-8").items():
+            if value is not None and value.strip():
+                out[name] = value.strip()
+    return out
+
+
+def _env_paths(files: DotenvType | None) -> tuple[Path, ...]:
+    if files is None:
+        return ()
+    if isinstance(files, (str, os.PathLike)):
+        return (Path(files),)
+    return tuple(Path(f) for f in files)
+
+
+def _api_key_env_names(models: ModelsConfig) -> list[str]:
     names = {
         role.api_key_env
         for profile in models.profiles.values()
         for role in (profile.planner, profile.supervisor, profile.agent, profile.summarizer)
         if role.api_key_env
     }
-    return [v for v in (source.get(n, "").strip() for n in sorted(names)) if v]
+    return sorted(names)
+
+
+def _model_key_env(
+    models: ModelsConfig, environ: Mapping[str, str] | None, files: Sequence[Path]
+) -> dict[str, str]:
+    source = os.environ if environ is None else environ
+    from_files: dict[str, str] | None = None
+    out: dict[str, str] = {}
+    for name in _api_key_env_names(models):
+        value = source.get(name, "").strip()
+        if not value:
+            if from_files is None:
+                from_files = read_env_files(files)
+            value = from_files.get(name, "")
+        if value:
+            out[name] = value
+    return out
 
 
 def _with_password(url: str, password: SecretStr | None) -> str:

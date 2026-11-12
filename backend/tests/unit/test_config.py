@@ -9,10 +9,12 @@ from pydantic import SecretStr, ValidationError
 
 from agentplatform.config import (
     DEFAULT_DATABASE_URL,
+    ModelsConfig,
     Settings,
     find_repo_root,
     load_models_config,
     load_policies_config,
+    model_key_values,
 )
 from agentplatform.errors import ConfigError
 
@@ -189,3 +191,58 @@ def test_nebius_key_from_env_file_reaches_models_and_leak_checks(
     assert "nb-test-123456789" in s.secret_values()  # gitleaks:allow
     assert "nb-test-123456789" not in repr(s)  # gitleaks:allow
     assert model_env(s, environ={})["NEBIUS_API_KEY"] == "nb-test-123456789"  # gitleaks:allow
+
+
+def _models_with_key(name: str) -> ModelsConfig:
+    role = {
+        "provider": "openai_compatible",
+        "base_url": "https://x.test/v1",
+        "model": "m",
+        "api_key_env": name,
+    }
+    return ModelsConfig.model_validate(
+        {
+            "profiles": {
+                "p": {
+                    "planner": role,
+                    "supervisor": role,
+                    "agent": {**role, "vision": True},
+                    "summarizer": role,
+                }
+            }
+        }
+    )
+
+
+def test_any_api_key_env_set_only_in_env_file_reaches_clients_and_leak_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider key Settings has no field for, set only in .env (pydantic does not
+    export it to os.environ), must reach the model clients and every leak check."""
+    from agentplatform.models.factory import resolve_api_key
+    from agentplatform.runtime.container import ProfileModels, model_env
+
+    key = "tp-test-123456789"  # gitleaks:allow
+    monkeypatch.delenv("TEST_PROVIDER_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"TEST_PROVIDER_KEY={key}\n")
+    models = _models_with_key("TEST_PROVIDER_KEY")
+    s = Settings(_env_file=env_file)
+
+    env = model_env(s, environ={}, models=models)
+    assert resolve_api_key(models.profile("p").planner, env) == key
+    clients = ProfileModels(models, env)
+    for role in ("planner", "supervisor", "agent", "summarizer"):
+        clients.client("p", role)  # builds without "TEST_PROVIDER_KEY is not set"
+    assert key in s.secret_values(models)
+    assert key not in repr(s)
+
+    monkeypatch.setitem(Settings.model_config, "env_file", str(env_file))
+    assert model_key_values(models) == [key]  # default source reads .env too
+
+    other = "tp-env-987654321"  # gitleaks:allow
+    monkeypatch.setenv("TEST_PROVIDER_KEY", other)  # the process environment wins
+    assert s.model_key_env(models) == {"TEST_PROVIDER_KEY": other}
+    assert Settings(_env_file=None).model_key_env(models) == {"TEST_PROVIDER_KEY": other}
+    monkeypatch.delenv("TEST_PROVIDER_KEY")
+    assert Settings(_env_file=None).model_key_env(models) == {}

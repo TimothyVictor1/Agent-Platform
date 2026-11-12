@@ -43,7 +43,6 @@ from agentplatform.config import (
     Settings,
     load_models_config,
     load_policies_config,
-    model_key_values,
 )
 from agentplatform.contracts.agent import Agent
 from agentplatform.contracts.artifact import Artifact
@@ -258,14 +257,22 @@ _KEY_FIELDS = {
 }
 
 
-def model_env(settings: Settings, environ: Mapping[str, str] | None = None) -> dict[str, str]:
+def model_env(
+    settings: Settings,
+    environ: Mapping[str, str] | None = None,
+    *,
+    models: ModelsConfig | None = None,
+) -> dict[str, str]:
     """``os.environ`` plus the model keys ``Settings`` read from ``.env`` (pydantic does
-    not export them), so ``api_key_env`` names resolve either way."""
+    not export them), so ``api_key_env`` names resolve either way: the keys Settings has
+    fields for, and (with ``models``) every other variable a profile names."""
     env = dict(os.environ if environ is None else environ)
     for name, attr in _KEY_FIELDS.items():
         secret = getattr(settings, attr)
         if secret is not None and secret.get_secret_value() and not env.get(name):
             env[name] = secret.get_secret_value()
+    if models is not None:
+        env = settings.model_env(models, env)
     return env
 
 
@@ -634,8 +641,8 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
     recorder = EventRecorder(store, bus)
     frames = await create_artifact_store(settings)
     board = PostgresBoardService(sm, recorder)
-    # model keys named by api_key_env count too (T21: e.g. a provider Settings lacks)
-    secrets = list(dict.fromkeys([*settings.secret_values(), *model_key_values(models_cfg)]))
+    # model keys named by api_key_env count too, from the environment or .env
+    secrets = settings.secret_values(models_cfg)
 
     docker = DockerLocalProvider.from_settings(
         settings,
@@ -651,7 +658,7 @@ async def build_container(settings: Settings, knobs: RuntimeKnobs | None = None)
             secrets=secrets,
             max_lifetime_min=settings.app_e2b_max_lifetime_min,
         )
-    models = ProfileModels(models_cfg, model_env(settings))
+    models = ProfileModels(models_cfg, model_env(settings, models=models_cfg))
     policy = Policy.from_config(policies)
 
     approvals = HitlApprovalGate(events=recorder, store=PostgresApprovalStore(sm), board=board)
