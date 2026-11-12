@@ -74,6 +74,7 @@ sandbox.
 | `ANTHROPIC_API_KEY` | Anthropic roles. This is also the default `api_key_env` for `provider: anthropic` when a profile omits it. |
 | `OPENROUTER_API_KEY` | OpenRouter profiles (`base_url: https://openrouter.ai/api/v1`). |
 | `GEMINI_API_KEY` | Gemini via its OpenAI-compatible endpoint (`generativelanguage.googleapis.com/.../openai/`). |
+| `NEBIUS_API_KEY` | Nebius Token Factory profiles (`base_url: https://api.tokenfactory.nebius.com/v1`). |
 | `LOCAL_LLM_KEY` | Only if your local model server was started with an API key (e.g. llama.cpp `--api-key`). Omit `api_key_env` in the profile when the server needs none; then no key is sent (`not-needed` placeholder keeps the SDK from leaking a real `OPENAI_API_KEY` to an unrelated server). |
 
 ### API, CORS and ports

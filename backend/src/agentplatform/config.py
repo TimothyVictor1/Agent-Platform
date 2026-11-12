@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
+    nebius_api_key: SecretStr | None = None
     local_llm_key: SecretStr | None = None
 
     frontend_origin: str = "http://localhost:3000"
@@ -160,6 +161,7 @@ class Settings(BaseSettings):
             self.anthropic_api_key,
             self.openrouter_api_key,
             self.gemini_api_key,
+            self.nebius_api_key,
             self.local_llm_key,
             self.app_pg_password,
             self.app_redis_password,

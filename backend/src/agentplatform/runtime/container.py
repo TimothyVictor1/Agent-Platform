@@ -253,6 +253,7 @@ _KEY_FIELDS = {
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "OPENROUTER_API_KEY": "openrouter_api_key",
     "GEMINI_API_KEY": "gemini_api_key",
+    "NEBIUS_API_KEY": "nebius_api_key",
     "LOCAL_LLM_KEY": "local_llm_key",
 }
 

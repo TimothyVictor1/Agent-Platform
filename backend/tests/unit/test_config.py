@@ -173,3 +173,19 @@ def test_model_key_values_reads_every_api_key_env() -> None:
     )
     env = {"NEW_PROVIDER_KEY": "np-123456789", "OTHER_KEY": " ok-987654321 "}  # gitleaks:allow
     assert model_key_values(models, env) == ["np-123456789", "ok-987654321"]  # gitleaks:allow
+
+
+def test_nebius_key_from_env_file_reaches_models_and_leak_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A NEBIUS_API_KEY that only lives in .env must reach the model clients and the
+    sandbox leak checks (pydantic does not export .env values to os.environ)."""
+    from agentplatform.runtime.container import model_env
+
+    monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("NEBIUS_API_KEY=nb-test-123456789\n")  # gitleaks:allow
+    s = Settings(_env_file=env_file)
+    assert "nb-test-123456789" in s.secret_values()  # gitleaks:allow
+    assert "nb-test-123456789" not in repr(s)  # gitleaks:allow
+    assert model_env(s, environ={})["NEBIUS_API_KEY"] == "nb-test-123456789"  # gitleaks:allow

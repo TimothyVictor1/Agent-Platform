@@ -49,6 +49,7 @@ the YAML: `api_key_env` names the variable, and the value goes into `.env`:
 | Anthropic (`provider: anthropic`) | `ANTHROPIC_API_KEY=...` |
 | OpenRouter | `OPENROUTER_API_KEY=...` |
 | Gemini (OpenAI-compatible endpoint) | `GEMINI_API_KEY=...` |
+| Nebius Token Factory | `NEBIUS_API_KEY=...` |
 | Local server (llama.cpp, Ollama, vLLM) | `LOCAL_LLM_KEY=` (often empty) |
 
 Replace the `<...>` placeholders with real model names. Set `default_profile` to the
