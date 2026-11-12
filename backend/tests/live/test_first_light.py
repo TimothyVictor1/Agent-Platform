@@ -125,7 +125,7 @@ async def _events(client: httpx.AsyncClient, sid: str) -> list[dict[str, Any]]:
     after = 0
     while True:
         resp = await client.get(
-            f"/api/v1/sessions/{sid}/events", params={"after_seq": after, "limit": 5000}
+            f"/api/v1/sessions/{sid}/events", params={"after_seq": after, "limit": 1000}
         )
         resp.raise_for_status()
         items = resp.json()["items"]
