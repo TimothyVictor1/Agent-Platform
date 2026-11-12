@@ -896,8 +896,9 @@ APP_ORPHAN_SWEEP_MIN=10
 APP_SANDBOX_EGRESS=open
 # Container name of the egress proxy (compose default shown).
 APP_EGRESS_PROXY_CONTAINER=agentplatform-egress-proxy-1
-# Exact host names the proxy lets resolve to private addresses (the eval fixture site).
-APP_EGRESS_ALLOW_PRIVATE_HOSTS=eval-fixtures
+# 1 lets the egress proxy resolve exactly the name eval-fixtures to a private address
+# (eval runs only). Every other private name or IP is always refused.
+APP_EGRESS_ALLOW_EVAL_FIXTURES=0
 ```
 Ports are configurable so several Superset worktrees can run side by side (API `APP_API_PORT`, frontend `PORT`, compose Postgres `APP_PG_PORT`, default 5432, and compose Redis `APP_REDIS_PORT`, default 6379).
 

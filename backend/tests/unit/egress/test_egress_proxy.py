@@ -103,13 +103,16 @@ def test_local_only() -> None:
 )
 def test_local_or_invalid_names_are_refused(host: str) -> None:
     with pytest.raises(Refused):
-        check_host_name(host, frozenset())
+        check_host_name(host)
 
 
-def test_names_are_normalised_and_allow_listed() -> None:
-    assert check_host_name("Example.COM.", frozenset()) == "example.com"
-    assert check_host_name("[2606:4700::1111]", frozenset()) == "2606:4700::1111"
-    assert check_host_name("eval-fixtures", frozenset({"eval-fixtures"})) == "eval-fixtures"
+def test_names_are_normalised() -> None:
+    assert check_host_name("Example.COM.") == "example.com"
+    assert check_host_name("[2606:4700::1111]") == "2606:4700::1111"
+    with pytest.raises(Refused):
+        check_host_name("eval-fixtures")  # single-label: refused unless the flag is on
+    assert check_host_name("eval-fixtures", allow_eval_fixtures=True) == "eval-fixtures"
+    assert check_host_name("Eval-Fixtures.", allow_eval_fixtures=True) == "eval-fixtures"
 
 
 def resolver(table: dict[str, list[str]], calls: list[str] | None = None):  # type: ignore[no-untyped-def]
@@ -150,14 +153,51 @@ async def test_policy_checks_every_resolved_address() -> None:
     assert (await policy.vet("1.1.1.1", 443, ok))[1] == "1.1.1.1"
 
 
-async def test_allowed_private_hosts_never_reach_loopback() -> None:
-    policy = Policy(allow_private_hosts=frozenset({"eval-fixtures"}))
+async def test_eval_fixtures_exception_is_off_by_default() -> None:
     table = {"eval-fixtures": ["172.20.0.5"]}
-    assert (await policy.vet("eval-fixtures", 80, resolver(table)))[1] == "172.20.0.5"
+    assert Policy().allow_eval_fixtures is False
     with pytest.raises(Refused):
-        await policy.vet("eval-fixtures", 80, resolver({"eval-fixtures": ["127.0.0.1"]}))
-    with pytest.raises(Refused):  # the allowance is for that name only
-        await policy.vet("172.20.0.5", 80, resolver(table))
+        await Policy().vet("eval-fixtures", 80, resolver(table))
+
+
+async def test_eval_fixtures_exception_covers_exactly_that_name() -> None:
+    """With the flag on, only the exact name ``eval-fixtures`` may resolve to a private
+    address; every other private name or IP stays blocked, and even ``eval-fixtures``
+    never reaches loopback, link-local or unspecified addresses."""
+    policy = Policy(allow_eval_fixtures=True)
+    private = ["172.20.0.5"]
+    assert (await policy.vet("eval-fixtures", 80, resolver({"eval-fixtures": private})))[
+        1
+    ] == "172.20.0.5"
+    for name in (
+        "eval-fixtures.evil.com",
+        "evil-eval-fixtures",
+        "eval-fixtures-2",
+        "xeval-fixtures",
+        "eval-fixtures.internal",
+        "eval_fixtures",
+        "postgres",
+        "redis",
+        "host.docker.internal",
+        "lan.example.com",
+    ):
+        with pytest.raises(Refused):
+            await policy.vet(name, 80, resolver({name: private}))
+    for literal in ("172.20.0.5", "192.168.65.254", "10.0.0.1", "100.64.0.1", "[fd00::1]"):
+        with pytest.raises(Refused):
+            await policy.vet(literal, 80, resolver({}))
+    for answers in (
+        ["127.0.0.1"],
+        ["169.254.169.254"],
+        ["0.0.0.0"],
+        ["::1"],
+        ["::ffff:127.0.0.1"],
+        ["172.20.0.5", "127.0.0.1"],
+    ):
+        with pytest.raises(Refused):
+            await policy.vet("eval-fixtures", 80, resolver({"eval-fixtures": answers}))
+    with pytest.raises(Refused, match="port"):  # ports stay limited too
+        await policy.vet("eval-fixtures", 5432, resolver({"eval-fixtures": private}))
 
 
 def test_parsing() -> None:
@@ -194,13 +234,17 @@ def test_parsing() -> None:
     )
 
 
-def test_build_reads_arguments() -> None:
-    proxy, host, port = build(
-        ["--listen", "127.0.0.1:3999", "--ports", "443", "--allow-private-hosts", "Eval-Fixtures"]
-    )
+def test_build_reads_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EGRESS_ALLOW_EVAL_FIXTURES", raising=False)
+    proxy, host, port = build(["--listen", "127.0.0.1:3999", "--ports", "443"])
     assert (host, port) == ("127.0.0.1", 3999)
     assert proxy.policy.allowed_ports == frozenset({443})
-    assert proxy.policy.allow_private_hosts == frozenset({"eval-fixtures"})
+    assert proxy.policy.allow_eval_fixtures is False  # off by default
+    monkeypatch.setenv("EGRESS_ALLOW_EVAL_FIXTURES", "1")
+    enabled, _, _ = build([])
+    assert enabled.policy.allow_eval_fixtures is True
+    with pytest.raises(SystemExit):
+        build(["--allow-eval-fixtures", "maybe"])
 
 
 # -- end to end ------------------------------------------------------------------------

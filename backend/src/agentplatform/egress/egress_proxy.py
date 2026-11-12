@@ -11,7 +11,7 @@ http://host/...``):
 * the port must be in ``allowed_ports`` (80 and 443 by default);
 * the host name must not be a local/internal name (``localhost``, ``*.localhost``,
   ``*.local``, ``*.internal`` such as ``host.docker.internal``), unless it is listed
-  in ``allow_private_hosts``;
+  ``eval-fixtures`` while ``allow_eval_fixtures`` is on;
 * the name is resolved once, and **every** resolved address must be public: no
   private, loopback, link-local, CGNAT (100.64/10), multicast, reserved or
   unspecified address, also when wrapped in IPv6 (IPv4-mapped, 6to4, Teredo, NAT64);
@@ -19,7 +19,8 @@ http://host/...``):
   DNS answer that changes between check and connect (rebinding) cannot reach the
   host.
 
-Hosts in ``allow_private_hosts`` (exact names, e.g. ``eval-fixtures``) may resolve to
+Only exception: with ``allow_eval_fixtures`` (``EGRESS_ALLOW_EVAL_FIXTURES=1``, off by
+default) the exact name ``eval-fixtures`` (the eval fixture site) may resolve to
 private addresses, but never to loopback, link-local or unspecified ones.
 
 Logs one JSON line per decision (host, port, verdict, reason) without paths or
@@ -45,6 +46,7 @@ IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Resolver = Callable[[str, int], Awaitable[list[str]]]
 
 DEFAULT_PORTS = frozenset({80, 443})
+EVAL_FIXTURES_HOST = "eval-fixtures"
 MAX_HEAD_BYTES = 16 * 1024
 _HOST_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*\.?$"
@@ -112,7 +114,7 @@ def is_local_only(ip: IPAddress) -> bool:
     return bool(ip.is_loopback or ip.is_link_local or ip.is_unspecified)
 
 
-def check_host_name(host: str, allow_private_hosts: frozenset[str]) -> str:
+def check_host_name(host: str, allow_eval_fixtures: bool = False) -> str:
     """The normalised host (lower case, no trailing dot, brackets removed from IPv6
     literals), or ``Refused``."""
     raw = host.strip()
@@ -129,7 +131,7 @@ def check_host_name(host: str, allow_private_hosts: frozenset[str]) -> str:
     name = raw.lower().rstrip(".")
     if not name or len(name) > 253 or not _HOST_RE.match(name):
         raise Refused(400, "invalid host name")
-    if name in allow_private_hosts:
+    if allow_eval_fixtures and name == EVAL_FIXTURES_HOST:
         return name
     if name in _BLOCKED_NAMES or name.endswith(_BLOCKED_SUFFIXES):
         raise Refused(403, "local host name")
@@ -147,13 +149,15 @@ async def system_resolver(host: str, port: int) -> list[str]:
 @dataclass
 class Policy:
     allowed_ports: frozenset[int] = DEFAULT_PORTS
-    allow_private_hosts: frozenset[str] = frozenset()
+    allow_eval_fixtures: bool = False
+    """Let exactly ``eval-fixtures`` resolve to a private (never loopback/link-local)
+    address. Off by default; only for eval runs."""
 
     async def vet(self, host: str, port: int, resolve: Resolver) -> tuple[str, str]:
         """``(host, address)`` to connect to, or ``Refused``."""
         if port not in self.allowed_ports:
             raise Refused(403, f"port {port} not allowed")
-        name = check_host_name(host, self.allow_private_hosts)
+        name = check_host_name(host, self.allow_eval_fixtures)
         try:
             literal: IPAddress | None = ipaddress.ip_address(name)
         except ValueError:
@@ -175,7 +179,7 @@ class Policy:
                 raise Refused(502, "resolver returned an invalid address") from None
             if "%" in a:
                 raise Refused(403, "scoped address")
-        private_ok = literal is None and name in self.allow_private_hosts
+        private_ok = literal is None and self.allow_eval_fixtures and name == EVAL_FIXTURES_HOST
         for ip in parsed:
             if is_local_only(ip):
                 raise Refused(403, "destination is local to the host")
@@ -410,6 +414,14 @@ def _safe_target(head: bytes) -> str:
 # -- entry point ----------------------------------------------------------------------
 
 
+def _flag(value: str) -> bool:
+    if value.strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    if value.strip().lower() in ("", "0", "false", "no", "off"):
+        return False
+    raise SystemExit(f"EGRESS_ALLOW_EVAL_FIXTURES must be 0 or 1, got {value!r}")
+
+
 def _csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
 
@@ -419,13 +431,15 @@ def build(argv: Iterable[str] | None = None) -> tuple[EgressProxy, str, int]:
     parser.add_argument("--listen", default=os.environ.get("EGRESS_LISTEN", "0.0.0.0:3128"))
     parser.add_argument("--ports", default=os.environ.get("EGRESS_ALLOWED_PORTS", "80,443"))
     parser.add_argument(
-        "--allow-private-hosts", default=os.environ.get("EGRESS_ALLOW_PRIVATE_HOSTS", "")
+        "--allow-eval-fixtures",
+        default=os.environ.get("EGRESS_ALLOW_EVAL_FIXTURES", "0"),
+        help="1 lets exactly the name eval-fixtures resolve to a private address",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     host, _, port = str(args.listen).rpartition(":")
     policy = Policy(
         allowed_ports=frozenset(int(p) for p in _csv(args.ports)),
-        allow_private_hosts=frozenset(h.lower() for h in _csv(args.allow_private_hosts)),
+        allow_eval_fixtures=_flag(str(args.allow_eval_fixtures)),
     )
     return EgressProxy(policy=policy), host or "0.0.0.0", int(port)  # noqa: S104
 

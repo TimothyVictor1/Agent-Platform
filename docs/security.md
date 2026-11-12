@@ -65,7 +65,9 @@ issue 1 is implemented and verified, but **off by default** until you turn it on
    - in `proxy` mode the sandbox keeps its default route for the moment between start and
      route removal, while the desktop boots and before any agent action;
    - allowed public destinations are unrestricted, as SPEC's `network: open` intends;
-   - `eval-fixtures` may resolve to a private address (never loopback).
+   - only with `APP_EGRESS_ALLOW_EVAL_FIXTURES=1` (off by default) may the exact name
+     `eval-fixtures` resolve to a private address (never loopback or link-local); every
+     other private name or IP stays blocked (`tests/unit/egress`).
 
    Keep `APP_API_TOKEN` and strong DB/Redis passwords in either mode.
 2. **`NEXT_PUBLIC_API_TOKEN` ships in the browser bundle.** Anyone who can load the UI can read the token. Treat it as local-only. The real fix is server-side sessions or a BFF (follow-up).

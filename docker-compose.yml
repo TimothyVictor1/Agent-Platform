@@ -79,8 +79,9 @@ services:
     environment:
       EGRESS_LISTEN: "0.0.0.0:3128"
       EGRESS_ALLOWED_PORTS: "80,443"
-      # exact names that may resolve to private addresses (the eval fixture site)
-      EGRESS_ALLOW_PRIVATE_HOSTS: ${APP_EGRESS_ALLOW_PRIVATE_HOSTS:-eval-fixtures}
+      # 1 lets exactly the name eval-fixtures (eval fixture site) resolve to a private
+      # address; off by default, every other private name/IP is always refused
+      EGRESS_ALLOW_EVAL_FIXTURES: ${APP_EGRESS_ALLOW_EVAL_FIXTURES:-0}
     volumes:
       - ./backend/src/agentplatform/egress/egress_proxy.py:/proxy/egress_proxy.py:ro
     user: "65534:65534"
