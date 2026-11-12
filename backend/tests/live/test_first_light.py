@@ -39,7 +39,7 @@ from agentplatform.runtime.main import Runtime
 
 pytestmark = [pytest.mark.live, pytest.mark.docker]
 
-BACKEND = Path(__file__).resolve().parents[1]
+BACKEND = Path(__file__).resolve().parents[2]
 PROMPT = "Open the browser, go to example.com and report the page heading as output `heading`"
 PLAN_TIMEOUT_S = 300.0
 RUN_TIMEOUT_S = 20 * 60.0
