@@ -69,6 +69,30 @@ provider outage does not fail tasks. It does put more load on a struggling serve
 - With no `api_key_env`, the client sends the placeholder key `not-needed`. This keeps
   the SDK from picking up `OPENAI_API_KEY` from the environment and sending it to an
   unrelated (e.g. local) server.
+- Reasoning models (e.g. Nemotron 3.5 Super VL and GLM-5.3 on Nebius) return their
+  thinking in `reasoning_content` (or `reasoning`), often with an empty `content`. The
+  client keeps it in `ModelResponse.reasoning`. It is never sent back to the model; the
+  agent step's `reasoning_excerpt` uses it when there is no text (secret-redacted,
+  whitespace-collapsed, at most 400 characters). Reasoning tokens count against
+  `max_output_tokens`.
+
+**Coordinates (vision roles)**: set `coordinate_mode` to what the model actually emits,
+not what the prompt asks for. **Nemotron 3.5 Super VL answers in screen fractions**: with
+`absolute` it ignored "pixels in the 1280x800 screenshot" and sent 0..1000 values (the
+first live run clicked (499, 470) meaning the centre, and (58, 912) below an 800-pixel
+screen), and without instructions it sent 0..1 decimals. Use `normalized_1000` for it.
+Two safety nets in `actions.py`: in `absolute` and `normalized_1000` modes, a point
+whose coordinates both look like 0..1 fractions (e.g. `0.499, 0.47`) is rejected with a
+model-readable error instead of clicking the top-left corner, and a point off the
+screenshot (but within twice its range) is clamped to the edge and the tool result says
+so (`; y=912 off-screen, clamped to the edge (...)`).
+
+**Text-only supervisor**: the supervisor attaches up to 3 screenshots to stuck and
+review runs only when its role has `vision: true`. GLM-5.3 on Nebius is text-only and
+rejects any image with HTTP 400 "This model does not support image input", so with it
+the supervisor decides from the run text alone and cannot look at the agent's screen.
+For later: a vision-capable supervisor (e.g. a VL model with good tool use, or reusing
+the agent's VL model) would let it judge stuck agents and results from the screenshots.
 
 **Anthropic**:
 - System messages go into the `system` parameter. Images are base64 `image` blocks.
