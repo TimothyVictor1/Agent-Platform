@@ -31,9 +31,28 @@ def test_example_models_config_is_valid() -> None:
     cloud = cfg.profile("cloud-best")
     assert cloud.supervisor.api_key_env == "ANTHROPIC_API_KEY"
     assert cloud.agent.effective_prompt_budget == 60_000
-    assert cfg.price("unknown-model").input == 0.0
+    assert cfg.price("<current Claude Haiku>").input == 1.0
+    with pytest.raises(ConfigError, match="no prices entry"):
+        cfg.price("unknown-model")
     with pytest.raises(ConfigError, match="unknown model profile"):
         cfg.profile("nope")
+
+
+def test_a_model_without_a_price_is_a_load_error() -> None:
+    """First light: a missing price counted as $0, so the cost budget never fired."""
+    role = {"provider": "openai_compatible", "base_url": "https://x.test/v1", "model": "paid"}
+    profile = {
+        "planner": role,
+        "supervisor": {**role, "model": "sup"},
+        "agent": {**role, "vision": True},
+        "summarizer": role,
+    }
+    with pytest.raises(ValidationError, match=r"without a prices entry.*: sup \["):
+        ModelsConfig.model_validate({"profiles": {"p": profile}, "prices": {"paid": {}}})
+    ok = ModelsConfig.model_validate(
+        {"profiles": {"p": profile}, "prices": {"paid": {"input": 1}, "sup": {}}}
+    )
+    assert ok.price("sup").input == 0.0
 
 
 def test_example_policies_config_is_valid() -> None:
@@ -170,7 +189,8 @@ def test_model_key_values_reads_every_api_key_env() -> None:
                     "agent": {**role, "vision": True, "api_key_env": "OTHER_KEY"},
                     "summarizer": {**role, "api_key_env": "UNSET_KEY"},
                 }
-            }
+            },
+            "prices": {"m": {}},
         }
     )
     env = {"NEW_PROVIDER_KEY": "np-123456789", "OTHER_KEY": " ok-987654321 "}  # gitleaks:allow
@@ -209,7 +229,8 @@ def _models_with_key(name: str) -> ModelsConfig:
                     "agent": {**role, "vision": True},
                     "summarizer": role,
                 }
-            }
+            },
+            "prices": {"m": {}},
         }
     )
 

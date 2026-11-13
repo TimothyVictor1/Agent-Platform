@@ -380,6 +380,21 @@ class ModelsConfig(_Strict):
             raise ValueError(f"default_profile {self.default_profile!r} is not a profile")
         return self
 
+    @model_validator(mode="after")
+    def _every_model_priced(self) -> Self:
+        """A model without a ``prices`` entry would count as $0 and slip past every cost
+        budget, so it is a load error. Free models need an explicit zero entry."""
+        missing = sorted(
+            {profile.role(role).model for profile in self.profiles.values() for role in ROLE_NAMES}
+            - self.prices.keys()
+        )
+        if missing:
+            raise ValueError(
+                "models without a prices entry (add one; use {input: 0, output: 0} for "
+                f"free models): {', '.join(missing)}"
+            )
+        return self
+
     def profile(self, name: str) -> Profile:
         try:
             return self.profiles[name]
@@ -389,7 +404,10 @@ class ModelsConfig(_Strict):
             ) from None
 
     def price(self, model: str) -> ModelPrice:
-        return self.prices.get(model, ModelPrice())
+        try:
+            return self.prices[model]
+        except KeyError:
+            raise ConfigError(f"model {model!r} has no prices entry") from None
 
 
 # --- policies.yaml -----------------------------------------------------------------------

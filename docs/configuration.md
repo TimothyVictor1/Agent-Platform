@@ -146,7 +146,7 @@ profiles:
     agent:      { ... }       # the desktop worker — MUST be a vision model
     summarizer: { ... }       # folds old history into progress notes (small model)
 
-prices:                       # USD, used for Usage.cost_usd (missing model id = all 0)
+prices:                       # USD, used for Usage.cost_usd (every model needs an entry)
   "<model id>": { input: 3.0, output: 15.0, image: 0.0 }
 ```
 
@@ -178,9 +178,11 @@ pings every configured endpoint via `client.health()`.
 ### Prices
 
 `prices` is a flat table keyed by model id: `input` and `output` per 1M tokens and
-`image` per image, all in USD. A model with no entry costs 0 (that is why local and
-`:free` models need no row). The accounting layer fills `Usage.cost_usd` from it and
-the UI meters cost against the session budget.
+`image` per image, all in USD. Every model a profile names needs an entry: a missing
+one is a load error (it used to count as $0 and slipped past the cost budget). Local
+and `:free` models get an explicit `{ input: 0, output: 0 }`. The accounting layer
+fills `Usage.cost_usd` from it, and every model call (agent, planner, supervisor) counts
+toward the session's cost budget.
 
 ## `config/policies.yaml` (safety policies)
 

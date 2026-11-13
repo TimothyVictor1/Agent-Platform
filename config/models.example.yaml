@@ -53,6 +53,13 @@ profiles:
     agent:      { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free vision model>", api_key_env: OPENROUTER_API_KEY, vision: true, concurrency: 1 }
     summarizer: { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free text model>", api_key_env: OPENROUTER_API_KEY, concurrency: 1 }
 
-prices:   # USD per 1M tokens, used for Usage.cost_usd (missing model = 0)
+# USD per 1M tokens, used for Usage.cost_usd and the cost budget. Every model named in
+# a profile needs an entry (a missing one is a load error); free models use zeros.
+prices:
+  "<local text or VLM model>": { input: 0, output: 0 }
+  "<local vision GUI model>": { input: 0, output: 0 }
+  "<small model>": { input: 0, output: 0 }
+  "<a :free text model>": { input: 0, output: 0 }
+  "<a :free vision model>": { input: 0, output: 0 }
   "<current Claude Sonnet>": { input: 3.0, output: 15.0 }
   "<current Claude Haiku>": { input: 1.0, output: 5.0 }

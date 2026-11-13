@@ -428,7 +428,7 @@ profiles:
   openrouter-free:
     agent: { provider: openai_compatible, base_url: https://openrouter.ai/api/v1, model: "<a :free vision model>", api_key_env: OPENROUTER_API_KEY, concurrency: 1 }
     # planner/supervisor/summarizer similar
-prices:   # USD per 1M tokens, used for Usage.cost_usd
+prices:   # USD per 1M tokens, used for Usage.cost_usd; every model needs an entry
   "<model id>": { input: 0.0, output: 0.0 }
 ```
 

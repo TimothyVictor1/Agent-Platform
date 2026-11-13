@@ -84,6 +84,7 @@ def models_config() -> ModelsConfig:
                     },
                 }
             },
+            "prices": {"local-model": {}, "claude-test": {"input": 3.0, "output": 15.0}},
         }
     )
 
