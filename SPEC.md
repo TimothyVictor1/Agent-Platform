@@ -356,7 +356,7 @@ Event {
 
 ### 7.2 Event types (payload models live next to the envelope)
 
-Session: `session.created`, `session.planning_started`, `session.plan_proposed`, `session.plan_updated`, `session.approved`, `session.paused`, `session.resumed`, `session.completed`, `session.failed`, `session.stopped`, `session.budget_warning`, `session.budget_exceeded`.
+Session: `session.created`, `session.planning_started`, `session.plan_proposed`, `session.plan_updated`, `session.approved`, `session.paused`, `session.resumed`, `session.completed`, `session.failed`, `session.stopped`, `session.budget_warning`, `session.budget_exceeded`, `session.model_usage` (usage of one planner, supervisor or summarizer call; agent calls are in `agent.step`).
 
 Task: `task.created`, `task.updated`, `task.ready`, `task.assigned` (payload has exactly one `agent_id`), `task.assignment_acked`, `task.started`, `task.result_submitted`, `task.review_started`, `task.accepted`, `task.rework_requested`, `task.failed`, `task.cancelled`.
 
@@ -647,7 +647,7 @@ Rules:
 5. **Leases**: an assigned task has a lease renewed by agent heartbeats every 10 s (TTL 45 s). On expiry (runtime crash, sandbox lost) the task returns to `ready` with `attempt+1`; the agent is marked `error` and its sandbox re-created or reconnected.
 6. **Retries**: `max_attempts` per task (default 2). After that the task is `failed` and the Supervisor decides (replan, skip, ask user).
 7. **Completion**: when every task is `done` or `cancelled` → `session.completed`. Agents idle 5 minutes (configurable) waiting for follow-ups, then sandboxes are paused (if provider supports) or killed. If any task is `failed` and the Supervisor cannot recover → `session.failed` with explanation.
-8. **Budgets**: track usage on every step; at 80 % emit `session.budget_warning`; at 100 % stop new steps, mark running tasks failed (reason `budget`), session `stopped`.
+8. **Budgets**: track usage on every step and every planner, supervisor and summarizer call (`session.model_usage`); at 80 % emit `session.budget_warning`; at 100 % stop new steps, mark running tasks failed (reason `budget`), session `stopped`.
 
 ## 13. Coordination: Board and inbox digest
 

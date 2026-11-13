@@ -13,12 +13,14 @@ from structlog.testing import capture_logs
 from agentplatform.contracts.artifact import Artifact
 from agentplatform.contracts.common import Actor, new_id, utcnow
 from agentplatform.contracts.events import (
+    AgentStep,
     ArtifactPublished,
     EventDraft,
     SessionApproved,
     SessionBudgetExceeded,
     SessionBudgetWarning,
     SessionFailed,
+    SessionModelUsage,
     SessionPlanProposed,
     SessionPlanUpdated,
     SessionStopped,
@@ -305,3 +307,59 @@ async def test_unhostable_new_session_fails_fast_with_a_safe_reason(
     await asyncio.sleep(0.3)  # acked: not redelivered, failed once, never planned
     assert len(world.events(session.id, "session.failed")) == 1
     assert not world.events(session.id, "session.planning_started")
+
+
+async def test_planner_and_supervisor_costs_reach_session_usage_and_budget(world: World) -> None:
+    """First light (HIGH): session cost equalled agent steps only. Every planner and
+    supervisor call is recorded as ``session.model_usage`` and counts toward usage."""
+    world.models.planner.cost_usd = 0.25
+    world.models.supervisor.cost_usd = 0.1
+    rt = await world.runtime()
+    sid = await ready_session(world, {"T1": []})
+    await world.wait_event(sid, "session.completed", limit_s=10)
+    usages = [payload(e, SessionModelUsage) for e in world.events(sid, "session.model_usage")]
+    roles = {u.role for u in usages}
+    assert {"planner", "supervisor"} <= roles
+    planner = [u for u in usages if u.role == "planner"]
+    assert planner[0].usage.cost_usd == pytest.approx(0.25)
+    assert planner[0].model == "planner-model"
+    assert all(u.usage.steps == 0 for u in usages)
+    steps = [payload(e, AgentStep).usage for e in world.events(sid, "agent.step")]
+    expected = sum(u.usage.cost_usd for u in usages) + sum(s.cost_usd for s in steps)
+    state = rt.hosts[sid].rt.scheduler.state
+    assert state.usage.cost_usd == pytest.approx(expected)
+    assert state.usage.cost_usd > sum(s.cost_usd for s in steps)  # not agent steps only
+    assert rt.hosts[sid].rt.budget.usage.cost_usd == pytest.approx(expected)
+
+
+async def test_planner_cost_alone_can_exceed_the_cost_budget(world: World) -> None:
+    """The planner's cost is in the budget before any agent step: a plan that already
+    cost more than ``max_cost_usd`` stops the session once it runs."""
+    world.models.planner.cost_usd = 1.5
+    await world.runtime()
+    sid = await ready_session(world, {"T1": []}, budgets=Budgets(max_cost_usd=1.0))
+    exceeded = await world.wait_event(sid, "session.budget_exceeded")
+    assert payload(exceeded, SessionBudgetExceeded).metric == "cost_usd"
+    assert payload(exceeded, SessionBudgetExceeded).used >= 1.5
+    stopped = await world.wait_event(sid, "session.stopped")
+    assert payload(stopped, SessionStopped).reason == "budget"
+
+
+async def test_model_usage_survives_a_restart_without_double_counting(world: World) -> None:
+    world.models.planner.cost_usd = 0.4
+    world.models.agent.behaviors = {"T1": Behavior(steps=200, latency_s=0.02)}
+    first = await world.runtime("rt-a")
+    sid = await ready_session(world, {"T1": []}, budgets=Budgets(max_cost_usd=5.0))
+    await world.wait_event(sid, "agent.step")
+    await first.crash()
+    world.directory.expire(sid)
+    second = await world.runtime("rt-b")
+    await until(lambda: second.hosts[sid].rt.budget.usage.cost_usd > 0)
+    planned = sum(
+        payload(e, SessionModelUsage).usage.cost_usd
+        for e in world.events(sid, "session.model_usage")
+        if payload(e, SessionModelUsage).role == "planner"
+    )
+    assert planned == pytest.approx(0.4)
+    budget = second.hosts[sid].rt.budget.usage.cost_usd
+    assert planned <= budget < 2 * planned

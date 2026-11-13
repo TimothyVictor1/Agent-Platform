@@ -44,18 +44,24 @@ async def test_matrix_contract_lifecycle() -> None:
         assert request.url.path.startswith("/api/v1/")
         path = request.url.path.removeprefix("/api/v1/")
         if path == "sessions":
-            created_requests.append(CreateSessionRequest.model_validate_json(request.content))
+            created_requests.append(
+                CreateSessionRequest.model_validate_json(request.content)
+            )
             polls = 0
             return response(session("planning"))
         if path == "sessions/s1":
             polls += 1
             return response(
-                SessionDetail(session=session("awaiting_approval" if polls == 1 else "completed"))
+                SessionDetail(
+                    session=session("awaiting_approval" if polls == 1 else "completed")
+                )
             )
         if path == "sessions/s1/approve":
             from agentplatform.contracts.api import ApprovePlanRequest
 
-            approvals.append(ApprovePlanRequest.model_validate_json(request.content).plan_version)
+            approvals.append(
+                ApprovePlanRequest.model_validate_json(request.content).plan_version
+            )
             return response(CommandAccepted(command_id="cmd1"))
         if path == "sessions/s1/events":
             cursor = int(request.url.params["after_seq"])
@@ -74,7 +80,9 @@ async def test_matrix_contract_lifecycle() -> None:
             return httpx.Response(200, content=data)
         raise AssertionError(str(request.url))
 
-    task = next(task for task in load_tasks(Path("evals/tasks")) if task.key == "injection-trap")
+    task = next(
+        task for task in load_tasks(Path("evals/tasks")) if task.key == "injection-trap"
+    )
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="http://test/api/v1/"
     ) as client:
@@ -185,7 +193,10 @@ async def test_bad_pagination() -> None:
 @pytest.mark.asyncio
 async def test_download_latest_and_hash_validation() -> None:
     content = b"latest"
-    old, latest = artifact("../unsafe.csv", b"old"), artifact("../unsafe.csv", content, 2)
+    old, latest = (
+        artifact("../unsafe.csv", b"old"),
+        artifact("../unsafe.csv", content, 2),
+    )
     downloads: list[str] = []
     corrupt = False
 
@@ -295,7 +306,9 @@ async def test_partial_score_does_not_pass_failed_session() -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="http://test/api/v1/"
     ) as client:
-        result = await run_one(API(client), task, "solo", 1, "local-free", "http://f", 0.001)
+        result = await run_one(
+            API(client), task, "solo", 1, "local-free", "http://f", 0.001
+        )
     assert result.status == "failed"
     assert result.partial_score == 0.5
     assert not result.success

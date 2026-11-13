@@ -31,6 +31,7 @@ export const eventPayloads = {
   "session.stopped": { reason: "user", detail: null },
   "session.budget_warning": { metric: "total_steps", used: 80, limit: 100 },
   "session.budget_exceeded": { metric: "total_steps", used: 100, limit: 100 },
+  "session.model_usage": { role: "planner", model: "demo-planner", agent_id: null, usage: { steps: 0, input_tokens: 1200, output_tokens: 300, images: 0, cost_usd: 0.004 } },
   "task.created": { task },
   "task.updated": { task: { ...task, title: "Updated research" }, changed_fields: ["title"] },
   "task.ready": ref,

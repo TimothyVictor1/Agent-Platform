@@ -20,6 +20,7 @@ from agentplatform.contracts.events import (
     SessionApproved,
     SessionCompleted,
     SessionCreated,
+    SessionModelUsage,
     SessionPaused,
     SessionPlanningFailed,
     SessionPlanProposed,
@@ -200,6 +201,30 @@ async def test_failed_task_with_retry_returns_to_pending(
     async with transaction(sessionmaker) as tx:
         t = await Repositories(tx).tasks.get(task.id)
         assert (t.status, t.attempt, t.assigned_agent_id) == ("pending", 1, None)
+
+
+async def test_planner_and_supervisor_usage_reach_the_session_row(
+    recorder: EventRecorder, sessionmaker: SessionMaker
+) -> None:
+    """First light: the session's usage (what the API and UI show) counted agent steps
+    only; ``session.model_usage`` is added too, without adding steps."""
+    session = make_session(agent_count=1)
+    await emit(recorder, session, SessionCreated(session=session))
+    for role, cost in (("planner", 0.25), ("supervisor", 0.1)):
+        await emit(
+            recorder,
+            session,
+            SessionModelUsage(
+                role=role,  # type: ignore[arg-type]
+                model="m",
+                usage=Usage(input_tokens=100, output_tokens=20, cost_usd=cost),
+            ),
+        )
+    async with transaction(sessionmaker) as tx:
+        s = await Repositories(tx).sessions.get(session.id)
+    assert s.usage.steps == 0
+    assert (s.usage.input_tokens, s.usage.output_tokens) == (200, 40)
+    assert s.usage.cost_usd == pytest.approx(0.35)
 
 
 async def test_session_lease_has_one_owner(

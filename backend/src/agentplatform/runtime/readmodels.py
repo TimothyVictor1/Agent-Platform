@@ -51,6 +51,7 @@ from agentplatform.contracts.events import (
     SessionCompleted,
     SessionCreated,
     SessionFailed,
+    SessionModelUsage,
     SessionPaused,
     SessionPlanningFailed,
     SessionPlanProposed,
@@ -154,6 +155,8 @@ async def project_read_models(event: Event, tx: object) -> None:
         | SessionStopped,
     ):
         await _project_session(repos, event)
+    elif isinstance(p, SessionModelUsage):
+        await repos.sessions.add_usage(event.session_id, p.usage)
     elif isinstance(p, AgentStep):
         await repos.sessions.add_usage(event.session_id, p.usage)
         if p.frame is not None and await repos.frames.find(p.frame.id) is None:

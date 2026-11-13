@@ -64,7 +64,7 @@ def test_spec_event_types_are_all_defined() -> None:
         "session.created", "session.planning_started", "session.plan_proposed",
         "session.plan_updated", "session.approved", "session.paused", "session.resumed",
         "session.completed", "session.failed", "session.stopped", "session.budget_warning",
-        "session.budget_exceeded",
+        "session.budget_exceeded", "session.model_usage",
         "task.created", "task.updated", "task.ready", "task.assigned",
         "task.assignment_acked", "task.started", "task.result_submitted",
         "task.review_started", "task.accepted", "task.rework_requested", "task.failed",

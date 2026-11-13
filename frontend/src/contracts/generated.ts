@@ -51,6 +51,7 @@ export type Event =
   | SessionStoppedEvent
   | SessionBudgetWarningEvent
   | SessionBudgetExceededEvent
+  | SessionModelUsageEvent
   | TaskCreatedEvent
   | TaskUpdatedEvent
   | TaskReadyEvent
@@ -1372,6 +1373,35 @@ export interface SessionBudgetExceeded {
 }
 /**
  * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
+ * via the `definition` "SessionModelUsageEvent".
+ */
+export interface SessionModelUsageEvent {
+  id: string;
+  session_id: string;
+  seq: number;
+  ts: string;
+  actor: Actor;
+  causation_id: string | null;
+  correlation_id: string | null;
+  type: "session.model_usage";
+  payload: SessionModelUsage;
+}
+/**
+ * Usage of one model call outside the agent loop (planner, supervisor, summarizer).
+ * Agent calls are counted in ``agent.step``; together they are the session's usage
+ * and what the token and cost budgets meter. ``usage.steps`` is always 0.
+ *
+ * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
+ * via the `definition` "SessionModelUsage".
+ */
+export interface SessionModelUsage {
+  role: "planner" | "supervisor" | "summarizer";
+  model: string;
+  agent_id: string | null;
+  usage: Usage;
+}
+/**
+ * This interface was referenced by `AgentPlatformContracts`'s JSON-Schema
  * via the `definition` "TaskCreatedEvent".
  */
 export interface TaskCreatedEvent {
@@ -1872,6 +1902,7 @@ export interface EventPage {
     | SessionStoppedEvent
     | SessionBudgetWarningEvent
     | SessionBudgetExceededEvent
+    | SessionModelUsageEvent
     | TaskCreatedEvent
     | TaskUpdatedEvent
     | TaskReadyEvent
@@ -2183,6 +2214,7 @@ export interface WsEventMessage {
     | SessionStoppedEvent
     | SessionBudgetWarningEvent
     | SessionBudgetExceededEvent
+    | SessionModelUsageEvent
     | TaskCreatedEvent
     | TaskUpdatedEvent
     | TaskReadyEvent

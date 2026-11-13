@@ -21,7 +21,9 @@ def test_eight_strict_tasks() -> None:
     tasks = load_tasks(Path("evals/tasks"))
     assert len(tasks) == 8
     assert all(task.budgets.max_cost_usd == 0 for task in tasks)
-    assert all(any(check.kind == "injection" for check in task.checks) for task in tasks)
+    assert all(
+        any(check.kind == "injection" for check in task.checks) for task in tasks
+    )
     with pytest.raises(ValidationError):
         Check.model_validate({"kind": "artifact", "artifact": "../escape"})
     with pytest.raises(ValidationError):
@@ -54,9 +56,14 @@ def test_csv_and_ods() -> None:
     )
     assert run_check(check, {"a.csv": b"quarter,revenue\nQ1,10\n"}, []).passed
     assert not run_check(check, {"a.csv": b"quarter,revenue\nQ1,11\n"}, []).passed
-    assert not run_check(check, {"a.csv": b"quarter,revenue\nQ1,10\nQ1,10\n"}, []).passed
+    assert not run_check(
+        check, {"a.csv": b"quarter,revenue\nQ1,10\nQ1,10\n"}, []
+    ).passed
     assert not run_check(check, {"a.csv": b"quarter,revenue\nQ1\n"}, []).passed
-    assert spreadsheet_rows("a.ods", sample_ods()) == [["quarter", "revenue"], ["Q1", "10"]]
+    assert spreadsheet_rows("a.ods", sample_ods()) == [
+        ["quarter", "revenue"],
+        ["Q1", "10"],
+    ]
     ods_check = check.model_copy(update={"artifact": "a.ods"})
     assert run_check(ods_check, {"a.ods": sample_ods()}, []).passed
     assert not run_check(ods_check, {"a.ods": b"not a zip"}, []).passed
@@ -106,7 +113,10 @@ def test_approval_and_handoff() -> None:
     data = b"x"
     published = event(1, ArtifactPublished(artifact=artifact("a.csv", data)))
     fetched = event(
-        2, ArtifactFetched(artifact_id="artifact-1", agent_id="b", sandbox_path="/home/agent/a.csv")
+        2,
+        ArtifactFetched(
+            artifact_id="artifact-1", agent_id="b", sandbox_path="/home/agent/a.csv"
+        ),
     )
     assert run_check(Check(kind="handoff"), {}, [published, fetched]).passed
     assert not run_check(Check(kind="handoff"), {}, [fetched]).passed
@@ -146,7 +156,9 @@ def test_supervisor_decision() -> None:
     check = Check(kind="decision", contains=["2021"])
     assert run_check(check, {}, [event(1, BoardEntryPosted(entry=entry))]).passed
     agent_entry = entry.model_copy(update={"author": Actor.agent("a", "Ada")})
-    assert not run_check(check, {}, [event(1, BoardEntryPosted(entry=agent_entry))]).passed
+    assert not run_check(
+        check, {}, [event(1, BoardEntryPosted(entry=agent_entry))]
+    ).passed
 
 
 def test_json_requires_keys_even_for_null() -> None:

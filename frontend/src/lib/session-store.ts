@@ -57,6 +57,12 @@ export function applyEvent(state: SessionState, event: Event): SessionState {
     // Budget events announce limits; session.stopped is the authoritative terminal transition.
     case "session.budget_warning":
     case "session.budget_exceeded": break;
+    case "session.model_usage": {
+      // Planner, supervisor and summarizer calls count toward session usage too.
+      const usage = event.payload.usage;
+      next.usage = { steps: next.usage.steps + usage.steps, input_tokens: next.usage.input_tokens + usage.input_tokens, output_tokens: next.usage.output_tokens + usage.output_tokens, images: next.usage.images + usage.images, cost_usd: next.usage.cost_usd + usage.cost_usd };
+      break;
+    }
     case "task.created":
     case "task.updated": next.tasks = { ...next.tasks, [event.payload.task.id]: event.payload.task }; break;
     case "task.ready": task(event.payload.task_id, { status: "ready" }); break;

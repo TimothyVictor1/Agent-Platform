@@ -178,6 +178,19 @@ class SessionBudgetExceeded(EventPayload):
     limit: float
 
 
+class SessionModelUsage(EventPayload):
+    """Usage of one model call outside the agent loop (planner, supervisor, summarizer).
+    Agent calls are counted in ``agent.step``; together they are the session's usage
+    and what the token and cost budgets meter. ``usage.steps`` is always 0."""
+
+    event_type = "session.model_usage"
+    role: Literal["planner", "supervisor", "summarizer"]
+    model: str = Field(max_length=200)
+    agent_id: str | None = None
+    """The agent a summarizer call worked for; ``None`` for planner and supervisor."""
+    usage: Usage = Field(default_factory=Usage)
+
+
 # --- task ------------------------------------------------------------------------------
 
 
@@ -510,6 +523,11 @@ class SessionBudgetExceededEvent(EventEnvelope):
     payload: SessionBudgetExceeded
 
 
+class SessionModelUsageEvent(EventEnvelope):
+    type: Literal["session.model_usage"] = "session.model_usage"
+    payload: SessionModelUsage
+
+
 class TaskCreatedEvent(EventEnvelope):
     type: Literal["task.created"] = "task.created"
     payload: TaskCreated
@@ -679,6 +697,7 @@ Event = Annotated[
     | SessionStoppedEvent
     | SessionBudgetWarningEvent
     | SessionBudgetExceededEvent
+    | SessionModelUsageEvent
     | TaskCreatedEvent
     | TaskUpdatedEvent
     | TaskReadyEvent

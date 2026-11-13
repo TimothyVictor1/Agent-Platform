@@ -29,7 +29,12 @@ class RunResult(Contract):
 
 
 def markdown_cell(value: str) -> str:
-    return value.replace("|", "\\|").replace("\n", " ").replace("\r", " ").replace("<", "&lt;")
+    return (
+        value.replace("|", "\\|")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace("<", "&lt;")
+    )
 
 
 def report_text(results: Sequence[RunResult]) -> str:
@@ -71,7 +76,9 @@ def report_text(results: Sequence[RunResult]) -> str:
                 "stuck_events",
                 "injection_resisted",
             ):
-                values.append(f"{mean(float(getattr(r.metrics, field)) for r in group):.4f}")
+                values.append(
+                    f"{mean(float(getattr(r.metrics, field)) for r in group):.4f}"
+                )
             lines.append("| " + " | ".join(values) + " |")
         lines.append("")
     lines += ["## Run details", ""]

@@ -28,7 +28,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import structlog
 
@@ -53,7 +53,9 @@ from agentplatform.contracts.events import (
     ArtifactPublished,
     BoardEntryPosted,
     Event,
+    EventDraft,
     EventEnvelope,
+    SessionModelUsage,
     SessionPaused,
     SessionResumed,
 )
@@ -95,10 +97,10 @@ from agentplatform.runtime.supervisor import (
 from agentplatform.sandboxes.base import SandboxHandle, SandboxProvider
 
 __all__ = [
-    "BudgetedModelClient",
     "CommandLog",
     "Container",
     "InMemoryCommandLog",
+    "MeteredModelClient",
     "ModelSource",
     "PrefetchAdapter",
     "ProfileModels",
@@ -236,7 +238,10 @@ class Container:
             raise RuntimeError(f"sandbox provider {name!r} is not configured") from None
 
     def planner(self, session: Session) -> Planner:
-        return self.planner_factory(self.models.client(session.model_profile, "planner"))
+        client = self.models.client(session.model_profile, "planner")
+        return self.planner_factory(
+            MeteredModelClient(client, role="planner", session_id=session.id, events=self.recorder)
+        )
 
     async def aclose(self) -> None:
         for close in reversed(self.closers):
@@ -308,13 +313,30 @@ class ProfileModels:
                 await client.aclose()
 
 
-class BudgetedModelClient:
-    """Adds every response's usage to a ``SessionBudget`` (with ``steps=0``), so the
-    supervisor's model use counts toward the session budget warning and stop."""
+UsageRole = Literal["planner", "supervisor", "summarizer"]
 
-    def __init__(self, inner: ModelClient, budget: SessionBudget) -> None:
+
+class MeteredModelClient:
+    """Records every response's usage as ``session.model_usage`` (planner, supervisor,
+    summarizer: every model call outside ``agent.step``). The event is what the
+    session's usage read model and the scheduler's budget fold count, so these calls
+    count toward the token and cost budgets and survive a restart."""
+
+    def __init__(
+        self,
+        inner: ModelClient,
+        *,
+        role: UsageRole,
+        session_id: str,
+        events: EventRecorder,
+        agent_id: str | None = None,
+    ) -> None:
         self.inner = inner
-        self._budget = budget
+        self._role: UsageRole = role
+        self._session_id = session_id
+        self._events = events
+        self._agent_id = agent_id
+        self._log = log.bind(session_id=session_id, role=role)
 
     @property
     def name(self) -> str:
@@ -323,14 +345,29 @@ class BudgetedModelClient:
     async def complete(self, req: ModelRequest) -> ModelResponse:
         resp = await self.inner.complete(req)
         u = resp.usage
-        self._budget.record(
-            Usage(
-                input_tokens=u.input_tokens,
-                output_tokens=u.output_tokens,
-                images=u.images,
-                cost_usd=u.cost_usd,
-            )
+        usage = Usage(
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            images=u.images,
+            cost_usd=u.cost_usd,
         )
+        draft = EventDraft(
+            payload=SessionModelUsage(
+                role=self._role,
+                model=self.inner.name[:200],
+                agent_id=self._agent_id,
+                usage=usage,
+            ),
+            actor=Actor.supervisor() if self._role == "supervisor" else Actor.system(),
+        )
+        try:
+            await self._events.record(self._session_id, draft)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The call already happened; failing it now would only make the caller
+            # retry and pay again. The store is down, so the next event fails too.
+            self._log.error("model_usage_record_failed", error=type(exc).__name__)
         return resp
 
     async def health(self) -> HealthStatus:
@@ -411,8 +448,11 @@ class SessionRuntime:
         if knobs.supervisor_enabled:
             self.supervisor = Supervisor(
                 session=session,
-                model=BudgetedModelClient(
-                    c.models.client(session.model_profile, "supervisor"), self.budget
+                model=MeteredModelClient(
+                    c.models.client(session.model_profile, "supervisor"),
+                    role="supervisor",
+                    session_id=session.id,
+                    events=c.recorder,
                 ),
                 board=c.board,
                 events=c.recorder,
@@ -484,7 +524,15 @@ class SessionRuntime:
             board=c.board,
             budget=AgentBudget(self.budget, agent.id),
             roster=_Roster(self, agent.id),
-            summarizer=ModelSummarizer(c.models.client(profile, "summarizer")),
+            summarizer=ModelSummarizer(
+                MeteredModelClient(
+                    c.models.client(profile, "summarizer"),
+                    role="summarizer",
+                    session_id=session.id,
+                    events=c.recorder,
+                    agent_id=agent.id,
+                )
+            ),
             fallback_parser=parse_text_tool_calls,
             renew_lease=deps.renew_lease,
             extra_rules=self._extra_rules,

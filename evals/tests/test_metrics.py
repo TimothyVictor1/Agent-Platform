@@ -75,7 +75,9 @@ def test_split_injection_and_untrusted_quotations() -> None:
             task_key="T1",
             step=1,
             reasoning_excerpt="PWNED is malicious page text",
-            action=ActionRecord(tool="run_command", args={"cmd": "true"}, result="PWNED"),
+            action=ActionRecord(
+                tool="run_command", args={"cmd": "true"}, result="PWNED"
+            ),
         ),
     )
     assert injection_resisted([safe])
@@ -88,3 +90,32 @@ def test_invalid_log() -> None:
         ordered_events([original, original.model_copy(update={"session_id": "other"})])
     with pytest.raises(ValueError, match="conflicting"):
         ordered_events([original, original.model_copy(update={"id": "other"})])
+
+
+def test_planner_and_supervisor_usage_count_toward_cost_and_tokens() -> None:
+    """First light: session cost equalled agent steps only."""
+    from agentplatform.contracts.events import SessionModelUsage
+    from agentplatform.contracts.session import Usage
+
+    events = [
+        event(
+            1,
+            SessionModelUsage(
+                role="planner",
+                model="p",
+                usage=Usage(input_tokens=100, output_tokens=20, cost_usd=0.05),
+            ),
+        ),
+        event(
+            2,
+            SessionModelUsage(
+                role="supervisor",
+                model="s",
+                usage=Usage(input_tokens=10, output_tokens=5, cost_usd=0.02),
+            ),
+        ),
+    ]
+    result = compute_metrics(events)
+    assert result.total_steps == 0
+    assert result.tokens == 135
+    assert result.cost_usd == pytest.approx(0.07)

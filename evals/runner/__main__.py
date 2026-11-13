@@ -93,7 +93,9 @@ async def run_matrix(
     for task in tasks:
         for mode in modes:
             for repeat in range(1, repeats + 1):
-                results.append(await run_one(api, task, mode, repeat, profile, fixture_url, poll))
+                results.append(
+                    await run_one(api, task, mode, repeat, profile, fixture_url, poll)
+                )
     return results
 
 
@@ -114,7 +116,9 @@ def main() -> None:
     args = parser().parse_args()
     modes = TypeAdapter(list[SessionMode]).validate_python(args.modes.split(","))
     if args.repeats < 1 or args.poll_seconds <= 0 or not modes:
-        parser().error("repeats and poll-seconds must be positive; modes must be nonempty")
+        parser().error(
+            "repeats and poll-seconds must be positive; modes must be nonempty"
+        )
     if not args.api_url.startswith(("http://", "https://")):
         parser().error("api-url must be HTTP(S)")
     tasks = load_tasks(args.tasks)

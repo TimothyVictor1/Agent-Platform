@@ -60,6 +60,7 @@ from agentplatform.contracts.events import (
     SessionCompleted,
     SessionCreated,
     SessionFailed,
+    SessionModelUsage,
     SessionPaused,
     SessionPlanProposed,
     SessionPlanUpdated,
@@ -541,7 +542,7 @@ class SchedulerState:
                     update={"status": "stopped"}
                 )
                 self.idle_since.pop(p.agent_id, None)
-        elif isinstance(p, AgentStep):
+        elif isinstance(p, (AgentStep, SessionModelUsage)):
             self.usage = self.usage.plus(p.usage)
         elif isinstance(p, ArtifactPublished):
             self.artifacts[p.artifact.id] = p.artifact
@@ -617,6 +618,7 @@ class Scheduler:
         self._last_tick = float("-inf")
         self._started_pool = False
         self._running = False
+        self._budget_synced = False
         self._actor = Actor.system()
         self._log = log.bind(session_id=session.id)
         pool.attach(self)
@@ -643,6 +645,7 @@ class Scheduler:
         try:
             await self._catch_up()
             self.budget.usage = self.state.usage
+            self._budget_synced = True
             self.budget.started_at = self.state.approved_at
             while not self._finished.is_set():
                 await self._reconcile()
@@ -782,7 +785,7 @@ class Scheduler:
         if event.session_id != self.session_id or event.seq <= self.state.last_seq:
             return
         if event.seq == self.state.last_seq + 1:
-            self.state.apply(event)
+            self._apply(event)
         else:
             await self._catch_up()
 
@@ -793,7 +796,15 @@ class Scheduler:
                 return
             for event in batch:
                 if event.seq > self.state.last_seq:
-                    self.state.apply(event)
+                    self._apply(event)
+
+    def _apply(self, event: Event) -> None:
+        self.state.apply(event)
+        if self._budget_synced and isinstance(event.payload, SessionModelUsage):
+            # Agents record their own steps in the shared budget as they go; planner,
+            # supervisor and summarizer usage reaches it only through its event, so a
+            # restart (which re-seeds the budget from the fold) never counts it twice.
+            self.budget.record(event.payload.usage)
 
     async def _emit(
         self,

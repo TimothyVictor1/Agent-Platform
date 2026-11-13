@@ -34,7 +34,9 @@ class API:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client = client
 
-    async def request(self, method: str, path: str, body: BaseModel | None = None) -> bytes:
+    async def request(
+        self, method: str, path: str, body: BaseModel | None = None
+    ) -> bytes:
         try:
             response = await self.client.request(
                 method, path, json=body.model_dump(mode="json") if body else None
@@ -46,7 +48,9 @@ class API:
         return response.content
 
     async def create(self, request: CreateSessionRequest) -> Session:
-        return Session.model_validate_json(await self.request("POST", "sessions", request))
+        return Session.model_validate_json(
+            await self.request("POST", "sessions", request)
+        )
 
     async def detail(self, session_id: str) -> SessionDetail:
         return SessionDetail.model_validate_json(
@@ -89,7 +93,8 @@ class API:
                 if approve_fixture_forms:
                     pending = ApprovalList.model_validate_json(
                         await self.request(
-                            "GET", f"sessions/{segment(session_id)}/approvals?status=pending"
+                            "GET",
+                            f"sessions/{segment(session_id)}/approvals?status=pending",
                         )
                     )
                     for approval in pending.items:
@@ -101,7 +106,8 @@ class API:
                                 "POST",
                                 f"approvals/{segment(approval.id)}/decide",
                                 ApprovalDecisionRequest(
-                                    decision="approve", note="Local fixture evaluation approval"
+                                    decision="approve",
+                                    note="Local fixture evaluation approval",
                                 ),
                             )
                         )
@@ -119,10 +125,14 @@ class API:
         while True:
             page = EventPage.model_validate_json(
                 await self.request(
-                    "GET", f"sessions/{segment(session_id)}/events?after_seq={cursor}&limit=1000"
+                    "GET",
+                    f"sessions/{segment(session_id)}/events?after_seq={cursor}&limit=1000",
                 )
             )
-            if any(event.session_id != session_id or event.seq <= cursor for event in page.items):
+            if any(
+                event.session_id != session_id or event.seq <= cursor
+                for event in page.items
+            ):
                 raise InvalidRequestError("invalid evaluation event page")
             events.extend(page.items)
             next_cursor = page.next_after_seq
@@ -156,7 +166,9 @@ class API:
         for name, item in latest.items():
             if item.size_bytes > 50_000_000:
                 raise InvalidRequestError("evaluation artifact exceeds size limit")
-            content = await self.request("GET", f"artifacts/{segment(item.id)}/download")
+            content = await self.request(
+                "GET", f"artifacts/{segment(item.id)}/download"
+            )
             if len(content) != item.size_bytes:
                 raise InvalidRequestError("artifact size mismatch")
             if sha256(content).hexdigest() != item.sha256:

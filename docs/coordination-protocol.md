@@ -349,15 +349,16 @@ posting helpers (`coordination/posting.py`), the public `Scheduler.reassign` and
 - The scheduler is built with `supervised_scheduler_config(base)`: `review="supervisor"`
   (results wait for the supervisor's review) and `supervisor_enabled=True` (a DAG
   stalled by failed tasks waits for the supervisor instead of failing the session).
-- `Supervisor(session=…, model=BudgetedModelClient(<supervisor role>, session_budget),
+- `Supervisor(session=…, model=MeteredModelClient(<supervisor role>, role="supervisor"),
   board=PostgresBoardService, events=<EventRecorder>, store=…, bus=…,
   scheduler=<the Scheduler>, control=AgentControls, frames=<ArtifactStore>,
   config=…)` with `require_human_for_plan_changes` from `policies.yaml`. It runs next
   to `Scheduler.run()` and is stopped when the session ends.
-- `BudgetedModelClient` adds the supervisor's model usage (tokens, cost; 0 steps) to
-  the session's `SessionBudget`, so it counts toward the 80 % warning and the 100 %
-  stop. That usage is in no event, so after a runtime restart the budget counts only
-  agent steps (contract change requested).
+- `MeteredModelClient` wraps the planner, supervisor and summarizer clients and records
+  each call's usage (tokens, cost; 0 steps) as `session.model_usage`. The session read
+  model adds it to `Session.usage`; the scheduler folds it into `SessionBudget` (after
+  seeding the budget from the log at start, so a restart neither loses nor doubles it),
+  so it counts toward the 80 % warning and the 100 % stop like agent steps.
 
 ### Triggers
 

@@ -2401,6 +2401,7 @@
           "session.completed": "#/$defs/SessionCompletedEvent",
           "session.created": "#/$defs/SessionCreatedEvent",
           "session.failed": "#/$defs/SessionFailedEvent",
+          "session.model_usage": "#/$defs/SessionModelUsageEvent",
           "session.paused": "#/$defs/SessionPausedEvent",
           "session.plan_proposed": "#/$defs/SessionPlanProposedEvent",
           "session.plan_updated": "#/$defs/SessionPlanUpdatedEvent",
@@ -2467,6 +2468,9 @@
         },
         {
           "$ref": "#/$defs/SessionBudgetExceededEvent"
+        },
+        {
+          "$ref": "#/$defs/SessionModelUsageEvent"
         },
         {
           "$ref": "#/$defs/TaskCreatedEvent"
@@ -2591,6 +2595,7 @@
                 "session.completed": "#/$defs/SessionCompletedEvent",
                 "session.created": "#/$defs/SessionCreatedEvent",
                 "session.failed": "#/$defs/SessionFailedEvent",
+                "session.model_usage": "#/$defs/SessionModelUsageEvent",
                 "session.paused": "#/$defs/SessionPausedEvent",
                 "session.plan_proposed": "#/$defs/SessionPlanProposedEvent",
                 "session.plan_updated": "#/$defs/SessionPlanUpdatedEvent",
@@ -2657,6 +2662,9 @@
               },
               {
                 "$ref": "#/$defs/SessionBudgetExceededEvent"
+              },
+              {
+                "$ref": "#/$defs/SessionModelUsageEvent"
               },
               {
                 "$ref": "#/$defs/TaskCreatedEvent"
@@ -4531,6 +4539,110 @@
         "payload"
       ],
       "title": "SessionFailedEvent",
+      "type": "object"
+    },
+    "SessionModelUsage": {
+      "additionalProperties": false,
+      "description": "Usage of one model call outside the agent loop (planner, supervisor, summarizer).\nAgent calls are counted in ``agent.step``; together they are the session's usage\nand what the token and cost budgets meter. ``usage.steps`` is always 0.",
+      "properties": {
+        "role": {
+          "enum": [
+            "planner",
+            "supervisor",
+            "summarizer"
+          ],
+          "type": "string"
+        },
+        "model": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        }
+      },
+      "required": [
+        "role",
+        "model",
+        "agent_id",
+        "usage"
+      ],
+      "title": "SessionModelUsage",
+      "type": "object"
+    },
+    "SessionModelUsageEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "causation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "correlation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "const": "session.model_usage",
+          "default": "session.model_usage",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/SessionModelUsage"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "seq",
+        "ts",
+        "actor",
+        "causation_id",
+        "correlation_id",
+        "type",
+        "payload"
+      ],
+      "title": "SessionModelUsageEvent",
       "type": "object"
     },
     "SessionPage": {
@@ -7525,6 +7637,7 @@
               "session.completed": "#/$defs/SessionCompletedEvent",
               "session.created": "#/$defs/SessionCreatedEvent",
               "session.failed": "#/$defs/SessionFailedEvent",
+              "session.model_usage": "#/$defs/SessionModelUsageEvent",
               "session.paused": "#/$defs/SessionPausedEvent",
               "session.plan_proposed": "#/$defs/SessionPlanProposedEvent",
               "session.plan_updated": "#/$defs/SessionPlanUpdatedEvent",
@@ -7591,6 +7704,9 @@
             },
             {
               "$ref": "#/$defs/SessionBudgetExceededEvent"
+            },
+            {
+              "$ref": "#/$defs/SessionModelUsageEvent"
             },
             {
               "$ref": "#/$defs/TaskCreatedEvent"

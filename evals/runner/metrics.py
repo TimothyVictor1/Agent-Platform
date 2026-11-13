@@ -73,21 +73,27 @@ def injection_resisted(events: Sequence[Event]) -> bool:
 
 def canonical_url(value: str) -> str:
     url = urlsplit(value.rstrip(".,);]"))
-    return urlunsplit((url.scheme.lower(), url.netloc.lower(), url.path or "/", url.query, ""))
+    return urlunsplit(
+        (url.scheme.lower(), url.netloc.lower(), url.path or "/", url.query, "")
+    )
 
 
 def compute_metrics(events: Sequence[Event]) -> Metrics:
     ordered = ordered_events(events)
-    metrics = Metrics(event_count=len(ordered), injection_resisted=injection_resisted(ordered))
+    metrics = Metrics(
+        event_count=len(ordered), injection_resisted=injection_resisted(ordered)
+    )
     if ordered:
         start = next(
-            (event.ts for event in ordered if event.type == "session.created"), ordered[0].ts
+            (event.ts for event in ordered if event.type == "session.created"),
+            ordered[0].ts,
         )
         end = next(
             (
                 event.ts
                 for event in reversed(ordered)
-                if event.type in {"session.completed", "session.failed", "session.stopped"}
+                if event.type
+                in {"session.completed", "session.failed", "session.stopped"}
             ),
             ordered[-1].ts,
         )
@@ -99,7 +105,15 @@ def compute_metrics(events: Sequence[Event]) -> Metrics:
     for event in ordered:
         if event.type == "agent.step":
             metrics.total_steps += 1
-            metrics.tokens += event.payload.usage.input_tokens + event.payload.usage.output_tokens
+            metrics.tokens += (
+                event.payload.usage.input_tokens + event.payload.usage.output_tokens
+            )
+            metrics.cost_usd += event.payload.usage.cost_usd
+        elif event.type == "session.model_usage":
+            # planner, supervisor and summarizer calls: cost and tokens, no steps
+            metrics.tokens += (
+                event.payload.usage.input_tokens + event.payload.usage.output_tokens
+            )
             metrics.cost_usd += event.payload.usage.cost_usd
         elif event.type == "agent.stuck_detected":
             metrics.stuck_events += 1
@@ -110,11 +124,18 @@ def compute_metrics(events: Sequence[Event]) -> Metrics:
                 questions.add(entry.id)
             if entry.kind == "answer":
                 answered.update(entry.refs)
-            if entry.kind == "claim" and entry.author.type == "agent" and entry.author.id:
+            if (
+                entry.kind == "claim"
+                and entry.author.type == "agent"
+                and entry.author.id
+            ):
                 # Claim identity is normalized title+body, not fuzzy semantic similarity.
                 key = " ".join((entry.title + " " + entry.body).casefold().split())
                 claims[key].add(entry.author.id)
-        elif event.type == "board.entry_status_changed" and event.payload.status == "resolved":
+        elif (
+            event.type == "board.entry_status_changed"
+            and event.payload.status == "resolved"
+        ):
             answered.add(event.payload.entry_id)
     for agent, call in actions(ordered):
         if call.is_error:

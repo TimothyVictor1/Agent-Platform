@@ -147,12 +147,14 @@ class AgentModel:
 
 class PlannerModel:
     """Planner ``ModelClient``: replies with ``plans`` in order (the last one repeats);
-    ``fail`` makes every reply invalid JSON (planner error after the repair call)."""
+    ``fail`` makes every reply invalid JSON (planner error after the repair call);
+    each reply costs ``cost_usd``."""
 
     def __init__(self, *plans: list[TaskDraft]) -> None:
         self.plans = list(plans) or [make_tasks({"T1": []})]
         self.fail = False
         self.calls = 0
+        self.cost_usd = 0.0
 
     @property
     def name(self) -> str:
@@ -160,11 +162,13 @@ class PlannerModel:
 
     async def complete(self, req: ModelRequest) -> ModelResponse:
         self.calls += 1
+        usage = ModelUsage(input_tokens=200, output_tokens=40, cost_usd=self.cost_usd)
         if self.fail:
-            return text_response("I cannot plan this.")
+            return text_response("I cannot plan this.").model_copy(update={"usage": usage})
         tasks = self.plans[min(self.calls - 1, len(self.plans) - 1)]
         proposal = PlanProposal(tasks=tasks, rationale="test")
-        return text_response(json.dumps(proposal.model_dump(mode="json")))
+        resp = text_response(json.dumps(proposal.model_dump(mode="json")))
+        return resp.model_copy(update={"usage": usage})
 
     async def health(self) -> HealthStatus:
         return HealthStatus(ok=True, latency_ms=0)
