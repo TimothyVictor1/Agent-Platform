@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -30,9 +31,10 @@ from agentplatform.contracts.events import (
 )
 from agentplatform.contracts.session import Budgets
 from agentplatform.errors import ConfigError
+from agentplatform.runtime.scheduler import SchedulerConfig
 from agentplatform.testing import make_tasks
 
-from .support import Behavior, World, payload, until
+from .support import FAST_KNOBS, Behavior, World, payload, until
 
 
 @pytest.fixture
@@ -363,3 +365,43 @@ async def test_model_usage_survives_a_restart_without_double_counting(world: Wor
     assert planned == pytest.approx(0.4)
     budget = second.hosts[sid].rt.budget.usage.cost_usd
     assert planned <= budget < 2 * planned
+
+
+def _stall_knobs(grace_s: float, timeout_s: float) -> SchedulerConfig:
+    base = FAST_KNOBS["scheduler"]
+    assert isinstance(base, SchedulerConfig)
+    return replace(base, stall_grace_s=grace_s, stall_timeout_s=timeout_s)
+
+
+async def test_supervised_session_with_only_failed_tasks_fails_promptly(world: World) -> None:
+    """First light: the only task failed for good (max steps) and the supervised session
+    waited for its wall clock. Once the supervisor handled the failure (here: noop) and
+    the grace passed, the session fails."""
+    world.models.agent.behaviors = {"T1": Behavior(fail=True)}
+    await world.runtime(scheduler=_stall_knobs(grace_s=0.3, timeout_s=60.0))
+    sid = await ready_session(world, {"T1": [], "T2": ["T1"]})
+    failed = await world.wait_event(sid, "session.failed", limit_s=10)
+    assert "T1" in payload(failed, SessionFailed).reason
+    actions = world.events(sid, "supervisor.action")
+    assert actions
+    assert actions[0].seq < failed.seq  # the supervisor had its chance first
+    assert not world.events(sid, "session.completed")
+
+
+async def test_stalled_session_waits_for_the_supervisor_then_times_out(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A supervisor that never handles the failure (its model keeps failing) does not
+    keep the session alive until the wall clock either: ``stall_timeout_s`` ends it."""
+    world.models.agent.behaviors = {"T1": Behavior(fail=True)}
+
+    async def down(req: Any) -> Any:
+        raise RuntimeError("supervisor model down")
+
+    monkeypatch.setattr(world.models.supervisor, "complete", down)
+    await world.runtime(scheduler=_stall_knobs(grace_s=0.05, timeout_s=1.0))
+    sid = await ready_session(world, {"T1": []})
+    task_failed = await world.wait_event(sid, "task.failed", limit_s=10)
+    failed = await world.wait_event(sid, "session.failed", limit_s=10)
+    assert not world.events(sid, "supervisor.action")  # unhandled: grace did not apply
+    assert (failed.ts - task_failed.ts).total_seconds() >= 0.9

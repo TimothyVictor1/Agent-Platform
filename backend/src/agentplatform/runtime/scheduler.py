@@ -48,6 +48,8 @@ from agentplatform.contracts.events import (
     AgentStatusChanged,
     AgentStep,
     AgentStopped,
+    ApprovalDecided,
+    ApprovalRequested,
     ArtifactPublished,
     BudgetMetric,
     Event,
@@ -66,6 +68,7 @@ from agentplatform.contracts.events import (
     SessionPlanUpdated,
     SessionResumed,
     SessionStopped,
+    SupervisorAction,
     SupervisorTriggered,
     TaskAccepted,
     TaskAssigned,
@@ -116,6 +119,8 @@ FINISHED_TASK_STATUSES = frozenset({"done", "cancelled"})
 _ACTIVE_TASK_STATUSES = frozenset({"ready", "assigned", "running", "in_review"})
 _NO_RETRY_REASONS = frozenset({"budget"})
 _HELD_MODES = frozenset({"pause", "takeover"})
+_ACTIVITY_PREFIXES = frozenset({"task", "supervisor", "approval", "board", "user"})
+_ACTIVITY_TYPES = frozenset({"session.plan_updated", "session.approved", "session.resumed"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +142,15 @@ class SchedulerConfig:
     """``auto``: the scheduler accepts submitted results itself (until T17)."""
     supervisor_enabled: bool = False
     """``False``: a DAG stalled by failed tasks ends in ``session.failed``. ``True``:
-    the scheduler waits for the Supervisor (replan, cancel, ask the user)."""
+    the scheduler waits for the Supervisor (replan, cancel, ask the user), but only as
+    long as ``stall_grace_s`` / ``stall_timeout_s`` allow."""
+    stall_grace_s: float = 60.0
+    """Supervised and stalled: once the supervisor has handled every failed task's
+    trigger and nothing happened for this long, the session fails (no wall clock)."""
+    stall_timeout_s: float = 600.0
+    """Supervised and stalled, triggers not handled (supervisor down, model failing) or
+    its last answer was ``ask_user``: the session fails after this long without
+    activity. Never while an approval is pending."""
 
 
 # -- pure helpers -------------------------------------------------------------------------
@@ -374,6 +387,17 @@ class SchedulerState:
     exceeded: set[str] = field(default_factory=set)
     triggered: set[str] = field(default_factory=set)
     """Task keys for which ``supervisor.triggered(task_failed)`` was emitted."""
+    trigger_seqs: dict[str, int] = field(default_factory=dict)
+    """Seq of every ``supervisor.triggered`` event, by event id."""
+    failed_trigger_seq: dict[str, int] = field(default_factory=dict)
+    """Task key -> seq of its newest ``task_failed`` trigger."""
+    handled_seq: int = 0
+    """Newest trigger seq a ``supervisor.action`` named (it handles every older one)."""
+    last_supervisor_tool: str | None = None
+    pending_approvals: set[str] = field(default_factory=set)
+    last_activity: datetime | None = None
+    """Ts of the newest event that can unblock a stalled DAG (task, plan, supervisor,
+    approval, steer or board events)."""
     completed: bool = False
 
     @classmethod
@@ -399,6 +423,8 @@ class SchedulerState:
     def apply(self, event: Event) -> None:
         self.last_seq = max(self.last_seq, event.seq)
         p = event.payload
+        if event.type.split(".", 1)[0] in _ACTIVITY_PREFIXES or event.type in _ACTIVITY_TYPES:
+            self.last_activity = event.ts
         # -- session
         if isinstance(p, SessionCreated):
             self.session = p.session
@@ -547,8 +573,19 @@ class SchedulerState:
         elif isinstance(p, ArtifactPublished):
             self.artifacts[p.artifact.id] = p.artifact
         elif isinstance(p, SupervisorTriggered):
+            self.trigger_seqs[event.id] = event.seq
             if p.reason == "task_failed" and p.task_key is not None:
                 self.triggered.add(p.task_key)
+                self.failed_trigger_seq[p.task_key] = event.seq
+        elif isinstance(p, SupervisorAction):
+            self.last_supervisor_tool = p.tool
+            seq = self.trigger_seqs.get(p.trigger_event_id or "")
+            if seq is not None:
+                self.handled_seq = max(self.handled_seq, seq)
+        elif isinstance(p, ApprovalRequested):
+            self.pending_approvals.add(p.approval.id)
+        elif isinstance(p, ApprovalDecided):
+            self.pending_approvals.discard(p.approval.id)
 
 
 # -- scheduler ----------------------------------------------------------------------------
@@ -1094,7 +1131,7 @@ class Scheduler:
             done = sum(1 for t in tasks.values() if t.status == "done")
             await self._emit(SessionCompleted(summary=f"{done} of {len(tasks)} tasks done"))
             return
-        if st.status == "running" and not self.config.supervisor_enabled and stalled(tasks):
+        if st.status == "running" and stalled(tasks) and self._give_up_on_stall():
             blocked = [t.key for t in tasks.values() if t.status in ("failed", "cancelled")]
             await self._emit(
                 SessionFailed(reason=f"tasks failed or cancelled: {', '.join(blocked)}")
@@ -1110,6 +1147,24 @@ class Scheduler:
             return
         if periodic and not any(t.status not in FINISHED_TASK_STATUSES for t in tasks.values()):
             await self._park_idle()
+
+    def _give_up_on_stall(self) -> bool:
+        """For a stalled DAG: fail now? At once without a supervisor. With one, after
+        it had its chance (first light waited for the wall clock instead)."""
+        if not self.config.supervisor_enabled:
+            return True
+        st = self.state
+        if st.pending_approvals:
+            return False  # a human decides (e.g. a supervisor plan change)
+        failed = [t.key for t in st.tasks.values() if t.status == "failed"]
+        handled = all(st.handled_seq >= st.failed_trigger_seq.get(k, 1 << 62) for k in failed)
+        wait = (
+            self.config.stall_grace_s
+            if handled and st.last_supervisor_tool != "ask_user"
+            else self.config.stall_timeout_s
+        )
+        since = st.last_activity or st.approved_at
+        return since is None or (self._now() - since).total_seconds() >= wait
 
     async def _park_idle(self) -> None:
         limit = timedelta(seconds=self.config.idle_timeout_s)

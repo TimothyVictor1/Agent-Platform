@@ -348,7 +348,12 @@ posting helpers (`coordination/posting.py`), the public `Scheduler.reassign` and
 
 - The scheduler is built with `supervised_scheduler_config(base)`: `review="supervisor"`
   (results wait for the supervisor's review) and `supervisor_enabled=True` (a DAG
-  stalled by failed tasks waits for the supervisor instead of failing the session).
+  stalled by failed tasks waits for the supervisor instead of failing the session at
+  once). The wait is bounded: once a `supervisor.action` has handled every failed
+  task's `task_failed` trigger and nothing changed for `stall_grace_s` (60 s), the
+  session fails; if the triggers stay unhandled (supervisor down) or its last answer
+  was `ask_user`, after `stall_timeout_s` (600 s) without activity. Never while an
+  approval is pending.
 - `Supervisor(session=…, model=MeteredModelClient(<supervisor role>, role="supervisor"),
   board=PostgresBoardService, events=<EventRecorder>, store=…, bus=…,
   scheduler=<the Scheduler>, control=AgentControls, frames=<ArtifactStore>,
