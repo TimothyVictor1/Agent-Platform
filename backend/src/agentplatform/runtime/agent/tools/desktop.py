@@ -48,6 +48,10 @@ def _xy(ctx: ToolContext, x: float, y: float) -> tuple[int, int]:
     )
 
 
+def _note(ctx: ToolContext, x: float, y: float) -> str:
+    return actions.clamp_note(x, y, ctx.coordinate_mode, ctx.observation)
+
+
 def _fmt(v: float) -> str:
     return str(int(v)) if float(v).is_integer() else f"{v:g}"
 
@@ -61,13 +65,19 @@ async def _click(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     count = int(args.get("count", 1))
     await ctx.sandbox.click(x, y, button=button, count=count)
     times = "" if count == 1 else f" x{count}"
-    return ToolResult(text=f"clicked {button}{times} at ({_fmt(args['x'])}, {_fmt(args['y'])})")
+    return ToolResult(
+        text=f"clicked {button}{times} at ({_fmt(args['x'])}, {_fmt(args['y'])})"
+        + _note(ctx, args["x"], args["y"])
+    )
 
 
 async def _move(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     x, y = _xy(ctx, args["x"], args["y"])
     await ctx.sandbox.move(x, y)
-    return ToolResult(text=f"moved pointer to ({_fmt(args['x'])}, {_fmt(args['y'])})")
+    return ToolResult(
+        text=f"moved pointer to ({_fmt(args['x'])}, {_fmt(args['y'])})"
+        + _note(ctx, args["x"], args["y"])
+    )
 
 
 async def _drag(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -77,6 +87,8 @@ async def _drag(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     return ToolResult(
         text=f"dragged from ({_fmt(args['x1'])}, {_fmt(args['y1'])}) "
         f"to ({_fmt(args['x2'])}, {_fmt(args['y2'])})"
+        + _note(ctx, args["x1"], args["y1"])
+        + _note(ctx, args["x2"], args["y2"])
     )
 
 

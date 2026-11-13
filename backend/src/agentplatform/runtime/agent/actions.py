@@ -33,6 +33,7 @@ __all__ = [
     "MAX_TYPE_TEXT_CHARS",
     "FallbackParser",
     "Observation",
+    "clamp_note",
     "crop_region",
     "normalize_key",
     "normalize_tool_calls",
@@ -205,9 +206,42 @@ def _fraction(
 def _fractions(
     x: object, y: object, mode: CoordinateMode, obs: Observation, names: tuple[str, str]
 ) -> tuple[float, float]:
-    fx = _fraction(_number(x, names[0]), names[0], mode, obs.width, obs)
-    fy = _fraction(_number(y, names[1]), names[1], mode, obs.height, obs)
+    vx, vy = _number(x, names[0]), _number(y, names[1])
+    if (
+        mode != "relative"
+        and 0.0 <= vx <= 1.0
+        and 0.0 <= vy <= 1.0
+        and not (vx.is_integer() and vy.is_integer())
+    ):
+        # A vision model falling back to its native 0..1 grounding (seen with Nemotron
+        # on Nebius): taken at face value this clicks the top-left corner.
+        raise CoordinateError(
+            f"{names[0]}={vx:g}, {names[1]}={vy:g} look like 0..1 fractions; "
+            f"{_range_help(mode, obs)}"
+        )
+    fx = _fraction(vx, names[0], mode, obs.width, obs)
+    fy = _fraction(vy, names[1], mode, obs.height, obs)
     return fx, fy
+
+
+def clamp_note(x: float, y: float, mode: CoordinateMode, obs: Observation) -> str:
+    """``""`` if the model point ``(x, y)`` lies inside the range of ``mode``; else a
+    note for the tool result that it was clamped to the screen edge, so the model
+    learns it aimed off-screen (call after ``to_sandbox_coords`` accepted the point)."""
+    if mode == "normalized_1000":
+        spans = (1000.0, 1000.0)
+    elif mode == "relative":
+        spans = (1.0, 1.0)
+    else:
+        spans = (float(obs.width), float(obs.height))
+    off = [
+        f"{name}={value:g}"
+        for name, value, span in (("x", float(x), spans[0]), ("y", float(y), spans[1]))
+        if value < 0 or value > span
+    ]
+    if not off:
+        return ""
+    return f"; {' and '.join(off)} off-screen, clamped to the edge ({_range_help(mode, obs)})"
 
 
 def to_sandbox_coords(

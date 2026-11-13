@@ -630,3 +630,53 @@ def test_local_schema_refs_resolve(no_io: list[str]) -> None:
     assert no_io == []
     assert len(problems) == 1
     assert "'usd' is a required property" in problems[0]
+
+
+# == T13: coordinate conventions ========================================================
+
+
+async def test_off_screen_click_is_clamped_and_says_so(
+    registry: ToolRegistry, make_ctx: Any
+) -> None:
+    """First live run: Nemotron sent y=912 for a 1280x800 screenshot; the click landed
+    on the bottom edge while the result echoed (58, 912) as if nothing was wrong."""
+    sb = FakeSandbox()
+    res = await run(registry, make_ctx(sandbox=sb), "click", x=58, y=912)
+    assert not res.is_error
+    assert res.text.startswith("clicked left at (58, 912); y=912 off-screen, clamped")
+    assert "1280x800 screenshot" in res.text
+    assert sb.actions[0].args["y"] == 799
+
+
+async def test_on_screen_click_has_no_clamp_note(registry: ToolRegistry, make_ctx: Any) -> None:
+    res = await run(registry, make_ctx(mode="normalized_1000"), "click", x=1000, y=0)
+    assert res.text == "clicked left at (1000, 0)"
+
+
+async def test_normalized_1000_maps_the_live_run_points(
+    registry: ToolRegistry, make_ctx: Any
+) -> None:
+    """(499, 470) was the Continue button and (58, 912) the Browser icon in 0..1000
+    space; read as pixels they hit the privacy-notice link and the bottom edge."""
+    sb = FakeSandbox()
+    ctx = make_ctx(sandbox=sb, mode="normalized_1000")
+    await run(registry, ctx, "click", x=499, y=470)
+    await run(registry, ctx, "click", x=58, y=912)
+    assert [(a.args["x"], a.args["y"]) for a in sb.actions] == [(639, 376), (74, 730)]
+
+
+@pytest.mark.parametrize("mode", ["absolute", "normalized_1000"])
+async def test_fraction_coordinates_are_rejected_outside_relative_mode(
+    registry: ToolRegistry, make_ctx: Any, mode: CoordinateMode
+) -> None:
+    """Nemotron answered a probe with {"x": 0.499, "y": 0.47}: in pixel or 0..1000
+    modes that would silently click the top-left corner."""
+    sb = FakeSandbox()
+    res = await run(registry, make_ctx(sandbox=sb, mode=mode), "click", x=0.499, y=0.47)
+    assert res.is_error
+    assert "look like 0..1 fractions" in res.text
+    assert sb.actions == []
+    ok = await run(registry, make_ctx(sandbox=sb, mode="relative"), "click", x=0.499, y=0.47)
+    assert not ok.is_error
+    corner = await run(registry, make_ctx(sandbox=sb, mode=mode), "click", x=1, y=0)
+    assert not corner.is_error  # integers 0/1 stay valid coordinates
