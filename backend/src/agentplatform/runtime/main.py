@@ -292,6 +292,16 @@ class Runtime:
         self._log.info("session_hosted", session_id=session.id, adopted=adopted)
         return host
 
+    async def _host_or_fail(self, session: Session, *, adopted: bool) -> SessionHost | None:
+        """``host`` for the sweeps: a permanent ``ConfigError`` (e.g. a model key that is
+        not set) fails the session at once, like a new session, instead of failing the
+        whole sweep again every interval while the session waits for its wall clock."""
+        try:
+            return await self.host(session, adopted=adopted)
+        except ConfigError as exc:
+            await self._fail_unhostable(session, exc)
+            return None
+
     def fence(self, session_id: str) -> None:
         host = self.hosts.pop(session_id, None)
         if host is not None:
@@ -302,7 +312,7 @@ class Runtime:
         since = self._now() - timedelta(seconds=c.knobs.adopt_completed_s)
         for session in await c.directory.adoptable(self.owner, completed_since=since):
             try:
-                await self.host(session, adopted=True)
+                await self._host_or_fail(session, adopted=True)
             except Exception as exc:
                 self._log.exception(
                     "session_adopt_failed", session_id=session.id, error=type(exc).__name__
@@ -314,7 +324,13 @@ class Runtime:
         cutoff = self._now() - timedelta(seconds=c.knobs.planning_sweep_s)
         planned: list[str] = []
         for session in await c.directory.stuck_planning(created_before=cutoff):
-            host = await self.host(session, adopted=True)
+            try:
+                host = await self._host_or_fail(session, adopted=True)
+            except Exception as exc:  # one session must not stop the sweep for the others
+                self._log.exception(
+                    "stuck_planning_host_failed", session_id=session.id, error=type(exc).__name__
+                )
+                continue
             if host is not None:
                 self._log.warning("stuck_planning_recovered", session_id=session.id)
                 host.plan_requests.put_nowait(None)
@@ -394,8 +410,9 @@ class Runtime:
             await c.bus.ack(delivery)
 
     async def _fail_unhostable(self, session: Session, exc: ConfigError) -> bool:
-        """Record ``session.failed`` for a session this runtime cannot host and release
-        its lease. ``False`` if that did not work (the command is then retried)."""
+        """Record ``session.failed`` for a session this runtime cannot host (new, stuck in
+        planning or adopted) and release its lease. ``False`` if that did not work (the
+        command is then retried; a sweep tries again next interval)."""
         c = self.container
         reason = safe_error_reason(exc, c.secrets)
         self._log.error(

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
 from agentplatform.contracts.events import (
+    SessionFailed,
     SessionPlanProposed,
     TaskAccepted,
     TaskFailed,
     TaskStarted,
 )
+from agentplatform.errors import ConfigError
 from agentplatform.testing import make_tasks
 
 from .support import Behavior, World, payload, until
@@ -150,3 +153,52 @@ async def test_plan_command_for_an_unknown_session_is_left_for_others(world: Wor
     await world.bus.enqueue("sessions:new", stranger)
     await asyncio.sleep(0.3)
     assert world.bus.pending_count("sessions:new") == 1  # not acked: not ours to drop
+
+
+def _break_models(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(profile: str, role: str) -> Any:
+        raise ConfigError("environment variable TEST_PROVIDER_KEY is not set")
+
+    monkeypatch.setattr(world.models, "client", broken)
+
+
+async def test_config_error_in_the_stuck_planning_sweep_fails_the_session(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Like a new session: a stuck-planning session that cannot be hosted for good is
+    failed by the sweep, and the other stuck session is still planned."""
+    await world.runtime("rt-a")
+    _break_models(world, monkeypatch)
+    broken = await world.create_session()  # no plan command: only the sweep finds it
+    failed = await world.wait_event(broken.id, "session.failed", limit_s=5)
+    assert "TEST_PROVIDER_KEY is not set" in payload(failed, SessionFailed).reason
+    known = world.directory.known[broken.id]
+    assert known.session.status == "failed"
+    assert known.owner is None
+    monkeypatch.undo()
+    healthy = await world.create_session()
+    await world.wait_event(healthy.id, "session.plan_proposed", limit_s=5)
+    await asyncio.sleep(0.3)  # later sweeps leave the failed session alone
+    assert len(world.events(broken.id, "session.failed")) == 1
+    assert not world.events(broken.id, "session.planning_started")
+
+
+async def test_config_error_while_adopting_fails_the_session(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restarted runtime that cannot host an adopted running session (e.g. its model
+    key was removed) fails it instead of retrying every sweep until the wall clock."""
+    world.models.agent.behaviors = {"T1": Behavior(steps=200, latency_s=0.02)}
+    first = await world.runtime("rt-a")
+    sid = await start_session(world, {"T1": []})
+    await world.wait_event(sid, "agent.step")
+    await first.crash()
+    world.directory.expire(sid)
+    _break_models(world, monkeypatch)
+    second = await world.runtime("rt-b")
+    failed = await world.wait_event(sid, "session.failed", limit_s=5)
+    assert "TEST_PROVIDER_KEY is not set" in payload(failed, SessionFailed).reason
+    assert sid not in second.hosts
+    assert world.directory.known[sid].owner is None
+    await asyncio.sleep(0.3)
+    assert len(world.events(sid, "session.failed")) == 1
