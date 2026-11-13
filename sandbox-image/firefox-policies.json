@@ -8,19 +8,67 @@
     "DisableCrashReporter": true,
     "DontCheckDefaultBrowser": true,
     "SearchSuggestEnabled": false,
-    "Homepage": { "URL": "about:blank", "Locked": true },
-    "StartPage": { "Value": "homepage", "Locked": true },
+    "Homepage": {
+      "URL": "about:blank",
+      "Locked": true
+    },
+    "StartPage": {
+      "Value": "homepage",
+      "Locked": true
+    },
     "Preferences": {
-      "browser.shell.checkDefaultBrowser": { "Value": false },
-      "browser.warnOnQuit": { "Value": false },
-      "browser.tabs.warnOnClose": { "Value": false },
-      "browser.sessionstore.resume_from_crash": { "Value": false },
-      "datareporting.policy.dataSubmissionEnabled": { "Value": false },
-      "toolkit.telemetry.enabled": { "Value": false },
-      "signon.rememberSignons": { "Value": false },
-      "browser.formfill.enable": { "Value": false },
-      "browser.ping-centre.telemetry": { "Value": false },
-      "app.update.auto": { "Value": false }
+      "browser.shell.checkDefaultBrowser": {
+        "Value": false
+      },
+      "browser.warnOnQuit": {
+        "Value": false
+      },
+      "browser.tabs.warnOnClose": {
+        "Value": false
+      },
+      "browser.sessionstore.resume_from_crash": {
+        "Value": false
+      },
+      "datareporting.policy.dataSubmissionEnabled": {
+        "Value": false
+      },
+      "toolkit.telemetry.enabled": {
+        "Value": false
+      },
+      "signon.rememberSignons": {
+        "Value": false
+      },
+      "browser.formfill.enable": {
+        "Value": false
+      },
+      "browser.ping-centre.telemetry": {
+        "Value": false
+      },
+      "app.update.auto": {
+        "Value": false
+      },
+      "browser.aboutwelcome.enabled": {
+        "Value": false
+      },
+      "browser.startup.homepage_override.mstone": {
+        "Value": "ignore"
+      },
+      "datareporting.policy.dataSubmissionPolicyBypassNotification": {
+        "Value": true
+      }
+    },
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "SkipTermsOfUse": true,
+    "UserMessaging": {
+      "WhatsNew": false,
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "UrlbarInterventions": false,
+      "SkipOnboarding": true,
+      "MoreFromMozilla": false,
+      "FirefoxLabs": false,
+      "Locked": true
     }
   }
 }
