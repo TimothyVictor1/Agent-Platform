@@ -276,6 +276,21 @@ def model_env(
     return env
 
 
+class RoleLookup(Protocol):
+    def role(self, profile: str, role: RoleName) -> RoleConfig | None: ...
+
+
+def supervisor_frames(
+    models: RoleLookup, profile: str, frames: ArtifactStore
+) -> ArtifactStore | None:
+    """The frame store the supervisor may attach screenshots from: only when its model
+    reads images. A text-only model (e.g. GLM-5.3 on Nebius) rejects any image with
+    HTTP 400, so with ``vision: false`` the supervisor works from text alone. A source
+    that does not describe its roles (test fakes) keeps the frames."""
+    role = models.role(profile, "supervisor")
+    return frames if role is None or role.vision else None
+
+
 class ProfileModels:
     """``ModelSource`` over ``models.yaml``: one wrapped client per (profile, role),
     sharing one ``SharedModelState`` (semaphores) per process."""
@@ -420,7 +435,7 @@ class SessionRuntime:
                 bus=c.bus,
                 scheduler=self.scheduler,
                 control=self.controls,
-                frames=c.frames,
+                frames=supervisor_frames(c.models, session.model_profile, c.frames),
                 config=replace(
                     knobs.supervisor,
                     require_human_for_plan_changes=c.policies.require_human_for_plan_changes,

@@ -114,6 +114,7 @@ from agentplatform.errors import (
     NotFoundError,
 )
 from agentplatform.models.base import ModelClient
+from agentplatform.models.errors import redact_secrets
 from agentplatform.runtime.agent.loop import LocalControlState
 from agentplatform.runtime.coordination import posting
 from agentplatform.runtime.coordination.board import BoardService
@@ -1318,7 +1319,13 @@ class Supervisor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._log.warning("supervisor_model_failed", error=type(exc).__name__)
+                # ModelError messages carry only the status and a truncated, redacted
+                # provider message; redact again for anything else.
+                self._log.warning(
+                    "supervisor_model_failed",
+                    error=type(exc).__name__,
+                    detail=redact_secrets(str(exc))[:300],
+                )
                 if wait is not None:
                     await self._sleep(wait)
         return None
