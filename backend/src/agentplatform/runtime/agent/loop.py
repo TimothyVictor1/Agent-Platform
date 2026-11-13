@@ -85,6 +85,7 @@ from agentplatform.contracts.session import Budgets, Session, Usage
 from agentplatform.contracts.task import Task, TaskResult
 from agentplatform.errors import LeaseLostError, SandboxError, SandboxExpiredError
 from agentplatform.models.base import ModelClient
+from agentplatform.models.errors import redact_secrets
 from agentplatform.runtime.agent.actions import (
     FallbackParser,
     Observation,
@@ -479,6 +480,14 @@ class _ModelTurn:
     text: str | None
     usage: ModelUsage
     latency_ms: int
+    reasoning: str | None = None
+
+
+def reasoning_excerpt(text: str | None, reasoning: str | None, limit: int = 400) -> str:
+    """The step's ``reasoning_excerpt``: the model's text, else its separate reasoning
+    (reasoning models often answer with tool calls only), secret-redacted and capped."""
+    source = text or reasoning or ""
+    return redact_secrets(" ".join(source.split()))[:limit]
 
 
 @dataclass(slots=True)
@@ -971,7 +980,7 @@ class AgentRuntime:
                 step=step,
                 coordination_calls=coordination,
                 action=action,
-                reasoning_excerpt=(turn.text or "")[:400],
+                reasoning_excerpt=reasoning_excerpt(turn.text, turn.reasoning),
                 frame=self._frame_model(frame, global_step, task, obs, label),
                 usage=step_usage,
                 model_latency_ms=turn.latency_ms,
@@ -1057,6 +1066,7 @@ class AgentRuntime:
         usage = ModelUsage()
         latency = 0
         text: str | None = None
+        reasoning: str | None = None
         convo = list(messages)
         for attempt in range(cfg.max_no_tool_retries + 1):
             req = ModelRequest(
@@ -1078,19 +1088,21 @@ class AgentRuntime:
                 images=usage.images + resp.usage.images,
                 cost_usd=usage.cost_usd + resp.usage.cost_usd,
             )
-            text = resp.text
+            text, reasoning = resp.text, resp.reasoning
             calls, used_fallback = normalize_tool_calls(resp, names, self._fallback)
             if used_fallback:
                 self._log.info("tool_calls_from_text", count=len(calls))
             if calls:
-                return _ModelTurn(calls=calls, text=text, usage=usage, latency_ms=latency)
+                return _ModelTurn(
+                    calls=calls, text=text, usage=usage, latency_ms=latency, reasoning=reasoning
+                )
             self._log.info("no_tool_call", attempt=attempt + 1)
             convo = [
                 *convo,
                 Message.text("assistant", text or "(no tool call)"),
                 Message.text("user", NO_TOOL_CORRECTION),
             ]
-        return _ModelTurn(calls=[], text=text, usage=usage, latency_ms=latency)
+        return _ModelTurn(calls=[], text=text, usage=usage, latency_ms=latency, reasoning=reasoning)
 
     # -- helpers --------------------------------------------------------------------
 

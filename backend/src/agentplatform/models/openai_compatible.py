@@ -119,6 +119,19 @@ def to_openai_tools(req: ModelRequest) -> list[dict[str, Any]]:
     ]
 
 
+REASONING_FIELDS = ("reasoning_content", "reasoning")
+"""Where OpenAI-compatible servers put a reasoning model's thinking (vLLM/SGLang and
+Nebius use ``reasoning_content``; newer servers ``reasoning``)."""
+
+
+def _reasoning(message: dict[str, Any]) -> str | None:
+    for key in REASONING_FIELDS:
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _parse_response(data: dict[str, Any], req: ModelRequest, latency_ms: int) -> ModelResponse:
     choices = data.get("choices") or []
     if not choices or not isinstance(choices[0], dict):
@@ -130,6 +143,7 @@ def _parse_response(data: dict[str, Any], req: ModelRequest, latency_ms: int) ->
             p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
         )
     text = content if isinstance(content, str) and content != "" else None
+    reasoning = _reasoning(message)
 
     calls: list[ToolCall] = []
     for i, raw in enumerate(message.get("tool_calls") or []):
@@ -145,6 +159,7 @@ def _parse_response(data: dict[str, Any], req: ModelRequest, latency_ms: int) ->
     usage = data.get("usage") or {}
     return ModelResponse(
         text=text,
+        reasoning=reasoning,
         tool_calls=calls,
         usage=ModelUsage(
             input_tokens=int(usage.get("prompt_tokens") or 0),

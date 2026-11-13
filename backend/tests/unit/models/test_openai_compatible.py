@@ -352,3 +352,48 @@ async def test_non_json_tool_arguments_are_a_model_error_without_a_request(value
         await client.complete(req)
     assert server.requests == []
     await client.aclose()
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+async def test_separate_reasoning_is_kept(field: str) -> None:
+    """T13: Nemotron/GLM on Nebius answer with ``reasoning_content`` next to the tool
+    call and no ``content``; the client used to drop it, so every step's excerpt was
+    empty."""
+    body = {
+        "id": "chatcmpl-r-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "nemotron",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    field: "  The Continue button is in the centre.  ",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "click", "arguments": '{"x": 499, "y": 470}'},
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 1332, "completion_tokens": 90, "total_tokens": 1422},
+    }
+    client = make_client(Server(httpx2.Response(200, json=body)))
+    resp = await client.complete(screenshot_request(tools=[CLICK]))
+    assert resp.text is None
+    assert resp.reasoning == "The Continue button is in the centre."
+    assert [c.name for c in resp.tool_calls] == ["click"]
+    await client.aclose()
+
+
+async def test_no_reasoning_field_means_none() -> None:
+    client = make_client(Server(httpx2.Response(200, json=fixture("openai_text.json"))))
+    resp = await client.complete(screenshot_request())
+    assert resp.reasoning is None
+    await client.aclose()

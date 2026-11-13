@@ -39,6 +39,7 @@ from agentplatform.runtime.agent.loop import (
     LocalControlState,
     TaskOutcome,
     build_agent_registry,
+    reasoning_excerpt,
 )
 from agentplatform.runtime.agent.tools.registry import ToolRegistry, ToolResult
 from agentplatform.testing import (
@@ -979,3 +980,26 @@ async def test_agent_runs_one_task_at_a_time(harness: Any) -> None:
     with pytest.raises(RuntimeError, match="already running"):
         await h.runtime.run_task(h.task)
     await first
+
+
+async def test_step_excerpt_falls_back_to_redacted_reasoning(harness: Any) -> None:
+    """T13: with ``content`` empty and the thinking in ``reasoning``, the step excerpt
+    shows the reasoning (redacted, whitespace-collapsed, <= 400 chars)."""
+    secret = "sk-abcdefghijklmnopqrstuvwxyz123456"  # gitleaks:allow
+    thinking = f"The Continue\n button  is centred; key {secret} " + "x" * 600
+    first = tool_response("click", x=500, y=470).model_copy(update={"reasoning": thinking})
+    h = harness([first, *clicks(2, start=2), submit(result="42")])
+    out = await h.run(limit_s=30)
+    assert out.status == "submitted"
+    steps = h.steps()
+    excerpt = steps[0].reasoning_excerpt
+    assert excerpt.startswith("The Continue button is centred; key sk-[redacted] x")
+    assert secret not in excerpt
+    assert len(excerpt) == 400
+    assert steps[1].reasoning_excerpt == "clicking 2"
+    assert steps[3].reasoning_excerpt == ""  # submit: neither text nor reasoning
+
+
+def test_text_wins_over_reasoning_for_the_excerpt() -> None:
+    assert reasoning_excerpt("clicking 1", "long thinking") == "clicking 1"
+    assert reasoning_excerpt(None, None) == ""

@@ -126,6 +126,10 @@ class ModelUsage(Contract):
 
 class ModelResponse(Contract):
     text: str | None = None
+    reasoning: str | None = None
+    """The model's separate reasoning, if the provider returns one (e.g.
+    ``reasoning_content`` from vLLM-style servers). Untrusted, may be long; never
+    sent back to the model. Excerpts only, redacted, in events."""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     usage: ModelUsage = Field(default_factory=ModelUsage)
     raw: dict[str, Any] = Field(default_factory=dict)
