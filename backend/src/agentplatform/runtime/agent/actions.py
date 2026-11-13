@@ -33,8 +33,12 @@ __all__ = [
     "MAX_TYPE_TEXT_CHARS",
     "FallbackParser",
     "Observation",
+    "axis_scale",
     "clamp_note",
+    "coordinate_scale",
     "crop_region",
+    "fraction_note",
+    "looks_like_fractions",
     "normalize_key",
     "normalize_tool_calls",
     "prepare_observation",
@@ -207,21 +211,72 @@ def _fractions(
     x: object, y: object, mode: CoordinateMode, obs: Observation, names: tuple[str, str]
 ) -> tuple[float, float]:
     vx, vy = _number(x, names[0]), _number(y, names[1])
-    if (
-        mode != "relative"
-        and 0.0 <= vx <= 1.0
-        and 0.0 <= vy <= 1.0
-        and not (vx.is_integer() and vy.is_integer())
-    ):
+    if mode != "relative" and looks_like_fractions(vx, vy):
         # A vision model falling back to its native 0..1 grounding (seen with Nemotron
-        # on Nebius): taken at face value this clicks the top-left corner.
-        raise CoordinateError(
-            f"{names[0]}={vx:g}, {names[1]}={vy:g} look like 0..1 fractions; "
-            f"{_range_help(mode, obs)}"
-        )
+        # on Nebius): taken at face value this clicks the top-left corner. On the
+        # 0..1000 scale the meaning is unambiguous, so convert; in pixels, reject.
+        if mode == "normalized_1000":
+            vx, vy = vx * 1000.0, vy * 1000.0
+        else:
+            raise CoordinateError(
+                f"{names[0]}={vx:g}, {names[1]}={vy:g} look like 0..1 fractions; "
+                f"{_range_help(mode, obs)}"
+            )
     fx = _fraction(vx, names[0], mode, obs.width, obs)
     fy = _fraction(vy, names[1], mode, obs.height, obs)
     return fx, fy
+
+
+def looks_like_fractions(x: float, y: float) -> bool:
+    """Both values in 0..1 and at least one not an integer (e.g. ``0.499, 0.47``):
+    clearly fractions of the screen, never a point on the 0..1000 or pixel scale."""
+    return 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and not (x.is_integer() and y.is_integer())
+
+
+def coordinate_scale(mode: CoordinateMode, shot: tuple[int, int]) -> str:
+    """The coordinate scale of ``mode``, stated for the model (system prompt and tool
+    descriptions use this one text)."""
+    if mode == "normalized_1000":
+        return (
+            "Give coordinates as integers 0..1000 relative to the screenshot "
+            "(0,0 = top-left, 1000,1000 = bottom-right)."
+        )
+    if mode == "relative":
+        return (
+            "Give coordinates as decimals 0..1 relative to the screenshot "
+            "(0,0 = top-left, 1,1 = bottom-right)."
+        )
+    return (
+        f"Give coordinates as integer pixels in the {shot[0]}x{shot[1]} screenshot "
+        "(0,0 = top-left)."
+    )
+
+
+def axis_scale(axis: str, mode: CoordinateMode, shot: tuple[int, int]) -> str:
+    """Description of one coordinate parameter (``x``, ``y``, ``w`` or ``h``)."""
+    if mode == "normalized_1000":
+        span = "0..1000"
+    elif mode == "relative":
+        span = "0..1"
+    else:
+        span = f"pixels 0..{(shot[0] if axis in ('x', 'w') else shot[1]) - 1}"
+    if axis == "x":
+        return f"{span}, from the left edge"
+    if axis == "y":
+        return f"{span}, from the top edge"
+    return f"{'width' if axis == 'w' else 'height'} on the same scale ({span})"
+
+
+def fraction_note(x: float, y: float, mode: CoordinateMode) -> str:
+    """``""`` unless a ``normalized_1000`` point was given as 0..1 fractions and
+    converted; then a note for the tool result saying how it was read."""
+    vx, vy = float(x), float(y)
+    if mode != "normalized_1000" or not looks_like_fractions(vx, vy):
+        return ""
+    return (
+        f"; read {vx:g}, {vy:g} as fractions of the screen = "
+        f"({vx * 1000:g}, {vy * 1000:g}) on the 0..1000 scale"
+    )
 
 
 def clamp_note(x: float, y: float, mode: CoordinateMode, obs: Observation) -> str:

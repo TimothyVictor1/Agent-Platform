@@ -112,7 +112,10 @@ from agentplatform.runtime.agent.stuck import (
     phash_distance,
 )
 from agentplatform.runtime.agent.tools.control import register_control_tools
-from agentplatform.runtime.agent.tools.desktop import register_desktop_tools
+from agentplatform.runtime.agent.tools.desktop import (
+    register_desktop_tools,
+    with_coordinate_scale,
+)
 from agentplatform.runtime.agent.tools.registry import (
     MAX_RESULT_CHARS,
     TaskGaveUp,
@@ -833,7 +836,9 @@ class AgentRuntime:
             w, h = _jpeg_size(run.pending_image)
             extra = ImagePart(jpeg_bytes=run.pending_image, width=w, height=h)
         hidden = frozenset({"submit_result"}) if step <= cfg.submit_hidden_steps else frozenset()
-        specs = self.registry.specs(hidden=hidden)
+        specs = with_coordinate_scale(
+            self.registry.specs(hidden=hidden), cfg.coordinate_mode, (obs.width, obs.height)
+        )
         try:
             messages = run.builder.build(
                 header=header,

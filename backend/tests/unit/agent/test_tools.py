@@ -31,7 +31,7 @@ from agentplatform.runtime.agent.loop import (
     build_agent_registry,
 )
 from agentplatform.runtime.agent.tools.control import validate_outputs
-from agentplatform.runtime.agent.tools.desktop import DESKTOP_TOOL_NAMES
+from agentplatform.runtime.agent.tools.desktop import DESKTOP_TOOL_NAMES, with_coordinate_scale
 from agentplatform.runtime.agent.tools.registry import (
     MAX_RESULT_CHARS,
     TaskGaveUp,
@@ -665,18 +665,71 @@ async def test_normalized_1000_maps_the_live_run_points(
     assert [(a.args["x"], a.args["y"]) for a in sb.actions] == [(639, 376), (74, 730)]
 
 
-@pytest.mark.parametrize("mode", ["absolute", "normalized_1000"])
-async def test_fraction_coordinates_are_rejected_outside_relative_mode(
-    registry: ToolRegistry, make_ctx: Any, mode: CoordinateMode
+async def test_fraction_coordinates_are_rejected_in_pixel_mode(
+    registry: ToolRegistry, make_ctx: Any
 ) -> None:
-    """Nemotron answered a probe with {"x": 0.499, "y": 0.47}: in pixel or 0..1000
-    modes that would silently click the top-left corner."""
+    """Nemotron answered a probe with {"x": 0.499, "y": 0.47}: in pixels that would
+    silently click the top-left corner, and the intended scale is ambiguous."""
     sb = FakeSandbox()
-    res = await run(registry, make_ctx(sandbox=sb, mode=mode), "click", x=0.499, y=0.47)
+    res = await run(registry, make_ctx(sandbox=sb), "click", x=0.499, y=0.47)
     assert res.is_error
     assert "look like 0..1 fractions" in res.text
     assert sb.actions == []
-    ok = await run(registry, make_ctx(sandbox=sb, mode="relative"), "click", x=0.499, y=0.47)
-    assert not ok.is_error
-    corner = await run(registry, make_ctx(sandbox=sb, mode=mode), "click", x=1, y=0)
-    assert not corner.is_error  # integers 0/1 stay valid coordinates
+    corner = await run(registry, make_ctx(sandbox=sb), "click", x=1, y=0)
+    assert not corner.is_error  # integers 0/1 stay valid pixels
+
+
+async def test_fraction_coordinates_are_converted_in_normalized_1000(
+    registry: ToolRegistry, make_ctx: Any
+) -> None:
+    """On the 0..1000 scale clear fractions are unambiguous: 0.499 means 499."""
+    sb = FakeSandbox()
+    ctx = make_ctx(sandbox=sb, mode="normalized_1000")
+    res = await run(registry, ctx, "click", x=0.499, y=0.47)
+    assert not res.is_error
+    assert res.text == (
+        "clicked left at (0.499, 0.47); read 0.499, 0.47 as fractions of the screen = "
+        "(499, 470) on the 0..1000 scale"
+    )
+    await run(registry, ctx, "click", x=499, y=470)  # the same point as integers
+    await run(registry, ctx, "click", x=1, y=0)  # integers stay on the 0..1000 scale
+    assert [(a.args["x"], a.args["y"]) for a in sb.actions] == [(639, 376), (639, 376), (1, 0)]
+    relative = await run(registry, make_ctx(sandbox=sb, mode="relative"), "click", x=0.5, y=0.5)
+    assert relative.text == "clicked left at (0.5, 0.5)"
+
+
+@pytest.mark.parametrize(
+    ("mode", "x_desc", "y_desc", "scale"),
+    [
+        (
+            "normalized_1000",
+            "0..1000, from the left edge",
+            "0..1000, from the top edge",
+            "integers 0..1000",
+        ),
+        ("relative", "0..1, from the left edge", "0..1, from the top edge", "decimals 0..1"),
+        (
+            "absolute",
+            "pixels 0..1279, from the left edge",
+            "pixels 0..799, from the top edge",
+            "integer pixels in the 1280x800 screenshot",
+        ),
+    ],
+)
+def test_tool_specs_state_the_coordinate_scale(
+    registry: ToolRegistry, mode: CoordinateMode, x_desc: str, y_desc: str, scale: str
+) -> None:
+    specs = {s.name: s for s in with_coordinate_scale(registry.specs(), mode, (1280, 800))}
+    for name in ("click", "move", "scroll", "zoom"):
+        props = specs[name].parameters["properties"]
+        assert props["x"]["description"] == x_desc, name
+        assert props["y"]["description"] == y_desc, name
+        assert scale in specs[name].description, name
+    drag = specs["drag"].parameters["properties"]
+    assert drag["x2"]["description"] == x_desc
+    assert drag["y1"]["description"] == y_desc
+    assert "on the same scale" in specs["zoom"].parameters["properties"]["w"]["description"]
+    assert "description" not in specs["key"].parameters["properties"]["combo"]
+    assert specs["key"].description == {s.name: s for s in registry.specs()}["key"].description
+    plain = {s.name: s for s in registry.specs()}["click"].parameters["properties"]["x"]
+    assert "description" not in plain  # the shared registry's specs stay untouched

@@ -49,6 +49,7 @@ from agentplatform.contracts.model_io import (
 from agentplatform.contracts.task import Task
 from agentplatform.errors import BudgetExceededError
 from agentplatform.models.base import ModelClient
+from agentplatform.runtime.agent.actions import coordinate_scale
 
 __all__ = [
     "CHARS_PER_TOKEN",
@@ -267,20 +268,7 @@ class ModelSummarizer:
 
 
 def _coordinate_help(mode: CoordinateMode, shot: tuple[int, int]) -> str:
-    if mode == "normalized_1000":
-        return (
-            "Give coordinates as integers 0..1000 relative to the screenshot "
-            "(0,0 = top-left, 1000,1000 = bottom-right)."
-        )
-    if mode == "relative":
-        return (
-            "Give coordinates as decimals 0..1 relative to the screenshot "
-            "(0,0 = top-left, 1,1 = bottom-right)."
-        )
-    return (
-        f"Give coordinates as integer pixels in the {shot[0]}x{shot[1]} screenshot "
-        "(0,0 = top-left)."
-    )
+    return coordinate_scale(mode, shot)
 
 
 def screenshot_size(screen: tuple[int, int], target_width: int) -> tuple[int, int]:

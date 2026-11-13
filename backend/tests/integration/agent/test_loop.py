@@ -1003,3 +1003,22 @@ async def test_step_excerpt_falls_back_to_redacted_reasoning(harness: Any) -> No
 def test_text_wins_over_reasoning_for_the_excerpt() -> None:
     assert reasoning_excerpt("clicking 1", "long thinking") == "clicking 1"
     assert reasoning_excerpt(None, None) == ""
+
+
+@pytest.mark.parametrize(
+    ("mode", "phrase"),
+    [("normalized_1000", "integers 0..1000"), ("absolute", "integer pixels in the")],
+)
+async def test_requests_state_the_configured_coordinate_scale(
+    harness: Any, mode: str, phrase: str
+) -> None:
+    """T13: the scale of the configured ``coordinate_mode`` is in the system prompt and
+    on every coordinate parameter of the tools sent to the model."""
+    h = harness([*clicks(3), submit(result="42")], config={"coordinate_mode": mode})
+    await h.run(limit_s=30)
+    req = h.model.calls[0].request
+    assert phrase in req.messages[0].text_content()
+    click = next(t for t in req.tools if t.name == "click")
+    assert phrase in click.description
+    expected = "0..1000, from the left edge" if mode == "normalized_1000" else "pixels 0.."
+    assert click.parameters["properties"]["x"]["description"].startswith(expected)

@@ -81,11 +81,15 @@ not what the prompt asks for. **Nemotron 3.5 Super VL answers in screen fraction
 `absolute` it ignored "pixels in the 1280x800 screenshot" and sent 0..1000 values (the
 first live run clicked (499, 470) meaning the centre, and (58, 912) below an 800-pixel
 screen), and without instructions it sent 0..1 decimals. Use `normalized_1000` for it.
-Two safety nets in `actions.py`: in `absolute` and `normalized_1000` modes, a point
-whose coordinates both look like 0..1 fractions (e.g. `0.499, 0.47`) is rejected with a
-model-readable error instead of clicking the top-left corner, and a point off the
-screenshot (but within twice its range) is clamped to the edge and the tool result says
-so (`; y=912 off-screen, clamped to the edge (...)`).
+The scale of the configured mode is stated in the system prompt and on every coordinate
+parameter of the desktop tools (`actions.coordinate_scale` / `axis_scale`, applied per
+request by `with_coordinate_scale`). Safety nets in `actions.py`: a point whose
+coordinates are clearly 0..1 fractions (both in 0..1, at least one not an integer, e.g.
+`0.499, 0.47`) is **converted** in `normalized_1000` mode (x1000, and the tool result
+says how it was read) and **rejected** with a model-readable error in `absolute` mode
+instead of clicking the top-left corner; integers always stay on the mode's scale. A
+point off the screenshot (but within twice its range) is clamped to the edge and the
+tool result says so (`; y=912 off-screen, clamped to the edge (...)`).
 
 **Text-only supervisor**: the supervisor attaches up to 3 screenshots to stuck and
 review runs only when its role has `vision: true`. GLM-5.3 on Nebius is text-only and

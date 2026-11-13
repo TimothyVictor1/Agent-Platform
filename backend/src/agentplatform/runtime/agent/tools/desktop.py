@@ -14,8 +14,10 @@ host (AGENTS.md §5).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from agentplatform.contracts.common import CoordinateMode
 from agentplatform.contracts.model_io import ToolSpec
 from agentplatform.runtime.agent import actions
 from agentplatform.runtime.agent.tools.registry import MAX_RESULT_CHARS, ToolRegistry, ToolResult
@@ -49,7 +51,9 @@ def _xy(ctx: ToolContext, x: float, y: float) -> tuple[int, int]:
 
 
 def _note(ctx: ToolContext, x: float, y: float) -> str:
-    return actions.clamp_note(x, y, ctx.coordinate_mode, ctx.observation)
+    return actions.fraction_note(x, y, ctx.coordinate_mode) + actions.clamp_note(
+        x, y, ctx.coordinate_mode, ctx.observation
+    )
 
 
 def _fmt(v: float) -> str:
@@ -287,6 +291,39 @@ _SPECS: list[tuple[ToolSpec, Any]] = [
 ]
 
 DESKTOP_TOOL_NAMES = frozenset(spec.name for spec, _ in _SPECS)
+
+_COORDINATE_AXES = {"x": "x", "x1": "x", "x2": "x", "y": "y", "y1": "y", "y2": "y"}
+_COORDINATE_AXES |= {"w": "w", "h": "h"}
+
+
+def with_coordinate_scale(
+    specs: Sequence[ToolSpec], mode: CoordinateMode, shot: tuple[int, int]
+) -> list[ToolSpec]:
+    """``specs`` with the coordinate scale of ``mode`` stated in every desktop tool that
+    takes a point (its description and each coordinate parameter), so the model reads
+    the scale next to the arguments it fills in, not only in the system prompt."""
+    scale = actions.coordinate_scale(mode, shot)
+    out: list[ToolSpec] = []
+    for spec in specs:
+        props: dict[str, Any] = dict(spec.parameters.get("properties") or {})
+        coords = [k for k in props if k in _COORDINATE_AXES]
+        if spec.name not in DESKTOP_TOOL_NAMES or not coords:
+            out.append(spec)
+            continue
+        for key in coords:
+            props[key] = {
+                **props[key],
+                "description": actions.axis_scale(_COORDINATE_AXES[key], mode, shot),
+            }
+        out.append(
+            spec.model_copy(
+                update={
+                    "description": f"{spec.description} {scale}",
+                    "parameters": {**spec.parameters, "properties": props},
+                }
+            )
+        )
+    return out
 
 
 def register_desktop_tools(registry: ToolRegistry) -> None:
