@@ -367,7 +367,7 @@ Implement:
 2. main.py: runtime entrypoint; claims sessions (DB lease so two runtimes never run the same session), consumes API commands from the bus (create session -> plan, refine, put plan, approve, followup, stop, pause, resume), recovers sessions on startup (running sessions: re-lease tasks, reconnect sandboxes via SandboxRef, resume agents).
 3. Graceful shutdown: SIGTERM -> stop accepting work, checkpoint agents, release leases.
 4. `make dev` runs API + runtime + web together (honcho or a small script) using the worktree ports from .env.
-5. Live test (APP_LIVE=1, APP_DOCKER=1): POST a session "Open the browser, go to example.com and report the page heading as output `heading`", approve via API, wait for completion, assert output == "Example Domain", frames stored, events contiguous.
+5. Live test (APP_LIVE=1, APP_DOCKER=1): POST a session "Open the browser, go to example.com and report the page title (the text shown in the browser tab or window title) as output `title`", approve via API, wait for completion, assert output == "Example Domain" (trimmed, case-insensitive; example.com no longer has an `<h1>`), frames stored, events contiguous.
 
 Tests: integration test of command handling with fakes; restart recovery test with fakes (kill the runtime object mid-task, start a new one, task completes, attempt counted correctly).
 Acceptance: first light passes on your machine; record the exact commands in docs/getting-started.md.

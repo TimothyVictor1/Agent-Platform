@@ -40,7 +40,12 @@ from agentplatform.runtime.main import Runtime
 pytestmark = [pytest.mark.live, pytest.mark.docker]
 
 BACKEND = Path(__file__).resolve().parents[2]
-PROMPT = "Open the browser, go to example.com and report the page heading as output `heading`"
+PROMPT = (
+    "Open the browser, go to example.com and report the page title (the text shown in "
+    "the browser tab or window title) as output `title`"
+)
+EXPECTED_TITLE = "Example Domain"
+"""example.com has no ``<h1>`` any more (2026); its ``<title>`` is still this."""
 PLAN_TIMEOUT_S = 300.0
 RUN_TIMEOUT_S = 20 * 60.0
 
@@ -176,9 +181,9 @@ async def test_first_light(stack: tuple[httpx.AsyncClient, Runtime]) -> None:
     detail = await _wait_status(client, sid, {"completed"}, RUN_TIMEOUT_S)
 
     outputs = [t["result"]["outputs"] for t in detail["tasks"] if t.get("result")]
-    headings = [str(o["heading"]).strip() for o in outputs if "heading" in o]
-    assert headings, f"no task reported a `heading` output: {outputs}"
-    assert headings[-1] == "Example Domain"
+    titles = [str(o["title"]).strip() for o in outputs if "title" in o]
+    assert titles, f"no task reported a `title` output: {outputs}"
+    assert titles[-1].casefold() == EXPECTED_TITLE.casefold(), titles[-1]
 
     frames = (await client.get(f"/api/v1/sessions/{sid}/frames")).json()["items"]
     assert frames, "no frames were stored"

@@ -88,10 +88,11 @@ worktree's desktops of sessions it does not know, and the test's session lives i
 throwaway database.
 
 It creates the session *"Open the browser, go to example.com and report the page
-heading as output `heading`"*, approves the plan, waits for completion (up to 20
-minutes) and checks:
+title (the text shown in the browser tab or window title) as output `title`"*,
+approves the plan, waits for completion (up to 20 minutes) and checks:
 
-- the reported `heading` is `Example Domain`;
+- the reported `title` is `Example Domain` (trimmed, case-insensitive; example.com
+  has no `<h1>` any more, but its `<title>` is still this);
 - frames were stored and can be downloaded;
 - the session's event seqs are contiguous (1, 2, 3, ...).
 
