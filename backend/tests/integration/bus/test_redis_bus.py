@@ -416,3 +416,23 @@ async def test_from_url_owns_and_closes_client(prefix: str) -> None:
 def test_rejects_non_positive_timeouts(redis: Redis) -> None:
     with pytest.raises(ValueError, match="positive"):
         RedisEventBus(redis, visibility_timeout_s=0)
+
+
+async def test_quiet_subscription_outlives_the_socket_timeout(prefix: str) -> None:
+    """First light: a subscription quiet for longer than the client's socket timeout
+    (redis-py 8: 5 s, equal to the old XREAD BLOCK) must keep delivering."""
+    url = load_settings().effective_redis_url
+    tight: Redis = Redis.from_url(url, decode_responses=True, socket_timeout=0.3)
+    bus = RedisEventBus(tight, prefix=prefix, subscribe_block_s=0.5, owns_client=True)
+    sid = f"s-{new_id()}"
+    try:
+        stream = bus.subscribe(sid, include_ephemeral=False)
+        reader = asyncio.ensure_future(take(stream, 1, within=10.0))
+        await asyncio.sleep(1.5)  # several reads time out at the socket
+        assert not reader.done()
+        await bus.publish(event(sid, 1))
+        (record,) = await reader
+        assert isinstance(record.item, EventEnvelope)
+        await stream.aclose()
+    finally:
+        await bus.aclose()

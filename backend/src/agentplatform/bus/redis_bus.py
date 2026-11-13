@@ -28,7 +28,9 @@ from typing import Any, cast
 import structlog
 from pydantic import ValidationError
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from agentplatform.bus.base import (
     BusRecord,
@@ -50,6 +52,10 @@ log = structlog.get_logger(__name__)
 
 GROUP = "workers"
 _EMPTY_STREAM_ID = "0-0"
+_SOCKET_TIMEOUT_MARGIN_S = 5.0
+"""``from_url`` sets the socket timeout this far above the longest ``BLOCK``: redis-py
+8 defaults to a 5 s socket timeout, which aborted every quiet ``XREAD BLOCK 5000``."""
+_SUBSCRIBE_RETRY_S = (0.1, 0.5, 1.0, 2.0)
 
 _StreamEntries = list[tuple[str, dict[str, str]]]
 _ReadResponse = list[tuple[str, _StreamEntries]] | None
@@ -99,7 +105,12 @@ class RedisEventBus:
 
     @classmethod
     def from_url(cls, url: str, **kwargs: Any) -> RedisEventBus:
-        client: Redis = Redis.from_url(url, decode_responses=True)
+        block_s = max(
+            float(kwargs.get("subscribe_block_s", 5.0)), float(kwargs.get("claim_interval_s", 1.0))
+        )
+        client: Redis = Redis.from_url(
+            url, decode_responses=True, socket_timeout=block_s + _SOCKET_TIMEOUT_MARGIN_S
+        )
         return cls(client, owns_client=True, **kwargs)
 
     # -- keys -------------------------------------------------------------------------
@@ -152,8 +163,27 @@ class RedisEventBus:
         }
         if include_ephemeral:
             cursors[ephemeral_key] = await self._last_id(ephemeral_key)
+        failures = 0
         while True:
-            response = cast(_ReadResponse, await self._redis.xread(cursors, block=self._block_ms))
+            try:
+                response = cast(
+                    _ReadResponse, await self._redis.xread(cursors, block=self._block_ms)
+                )
+            except (RedisTimeoutError, RedisConnectionError) as exc:
+                # A socket timeout on a quiet stream, or Redis briefly away. The cursors
+                # are kept, so nothing is skipped; ending the generator instead would
+                # leave the scheduler and supervisor deaf for the rest of the session.
+                delay = _SUBSCRIBE_RETRY_S[min(failures, len(_SUBSCRIBE_RETRY_S) - 1)]
+                failures += 1
+                log.warning(
+                    "bus_subscribe_retry",
+                    session_id=session_id,
+                    error=type(exc).__name__,
+                    attempt=failures,
+                )
+                await asyncio.sleep(delay)
+                continue
+            failures = 0
             for key, entries in response or []:
                 for entry_id, fields in entries:
                     cursors[key] = entry_id
